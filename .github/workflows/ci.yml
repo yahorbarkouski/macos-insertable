@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The entire decision layer is pure TypeScript against a fake bridge — proving it on Linux is
+  # the point: no macOS in sight, same verdicts.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  native:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install # compiles the addon
+      - run: pnpm test
+      - run: pnpm test:contract
+
+  # The E2E suite (test/e2e) needs the Accessibility TCC grant and real keyboard focus, which
+  # hosted runners cannot provide. It is the local release gate: `pnpm test:e2e`.

@@ -1,0 +1,68 @@
+{
+  "name": "macos-insertable",
+  "version": "0.1.0",
+  "description": "Find the focused text field of any macOS application, learn whether text can be inserted there, and insert it — verified, safely, through the Accessibility API with clipboard and keystroke fallbacks.",
+  "keywords": [
+    "macos",
+    "accessibility",
+    "axuielement",
+    "dictation",
+    "text-insertion",
+    "focused-field",
+    "automation",
+    "paste"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yahorbarkouski/macos-insertable.git"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "bin": {
+    "macos-insertable": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "native",
+    "binding.gyp",
+    "scripts/install.cjs",
+    "prebuilds"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install": "node scripts/install.cjs",
+    "build": "tsup",
+    "build:native": "node-gyp rebuild",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run test/classify.test.ts test/capture.test.ts test/insert.test.ts",
+    "test:contract": "vitest run test/contract.test.ts",
+    "test:e2e": "vitest run test/e2e/insert.e2e.test.ts",
+    "test:all": "vitest run"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.5.0",
+    "node-gyp-build": "^4.8.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.13",
+    "@types/node": "^24.10.9",
+    "node-gyp": "^11.4.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

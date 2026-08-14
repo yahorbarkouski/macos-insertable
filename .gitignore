@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build/
+prebuilds/
+test/e2e/host-bin/
+*.log
+.DS_Store
