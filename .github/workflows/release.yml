@@ -56,8 +56,10 @@ jobs:
           fi
 
       # npm refuses to replace a published version, and its error for that is obscure. Say it
-      # plainly here instead, before spending the rest of the job.
+      # plainly here instead, before spending the rest of the job. Skipped for a rehearsal,
+      # which exists to exercise the pipeline against whatever version is current.
       - name: Check this version is not already published
+        if: ${{ !inputs.dry_run }}
         run: |
           version="$(node -p "require('./package.json').version")"
           if npm view "macos-insertable@$version" version >/dev/null 2>&1; then
