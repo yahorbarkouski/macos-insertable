@@ -379,7 +379,8 @@ describe('rung 1 — verified accessibility write', () => {
     const captured = await capturedWith(bridge)
     expect(await captured.insert('replaced', { mode: 'all' })).toEqual({
       delivered: false,
-      reason: 'unreadable-replace-all'
+      reason: 'unreadable-replace-all',
+      mayHaveLanded: true
     })
     expect(bridge.postPaste).not.toHaveBeenCalled()
   })
@@ -437,7 +438,8 @@ describe('rung 2 — borrowed clipboard paste', () => {
     const captured = await capturedWith(bridge)
     expect(await captured.insert(' world')).toEqual({
       delivered: false,
-      reason: 'paste-did-not-land'
+      reason: 'paste-did-not-land',
+      mayHaveLanded: true
     })
   })
 
@@ -558,7 +560,8 @@ describe('rung 3 — synthetic keystrokes', () => {
     const captured = await capturedWith(bridge)
     expect(await captured.insert('x', { strategy: 'keystrokes' })).toEqual({
       delivered: false,
-      reason: 'type-failed'
+      reason: 'type-failed',
+      mayHaveLanded: true
     })
   })
 
@@ -606,5 +609,87 @@ describe('verification helpers', () => {
     expect(readCarriesEvidence(textState({ value: '' }), textState({ value: 'a' }))).toBe(true)
     expect(readCarriesEvidence(textState(), null)).toBe(false)
     expect(readCarriesEvidence(textState(), textState({ hasValue: false }))).toBe(false)
+  })
+})
+
+describe('the trust ladder — web surfaces earn precise writes by showing evidence', () => {
+  /** A web element (DOM vocabulary present) whose value is scratch: the untrusted case. */
+  const SCRATCH_WEB = {
+    value: '​​',
+    numberOfCharacters: 2,
+    selectionStart: 0,
+    selectionLength: 0,
+    attributeNames: ['AXRole', 'AXValue', 'AXSelectedText', 'AXSelectedTextRange', 'ChromeAXNodeId']
+  }
+
+  it('routes an untrusted web surface straight to paste — no AX writes to tunnel', async () => {
+    // Against a decoy, an "ok" AX write with an unchanged read-back is undecidable — inert or
+    // tunneled — and pasting after a tunneled write is how text lands twice. One paste, which
+    // creates its own evidence on a real field, is the only safe opening move.
+    const bridge = fakeBridge({
+      readElementState: vi
+        .fn<NativeBridge['readElementState']>()
+        .mockResolvedValueOnce(textState({ value: '​​' }))
+        .mockResolvedValue(textState({ value: 'landed' }))
+    })
+    const captured = await capturedWith(bridge, SCRATCH_WEB)
+    expect(await captured.insert('landed')).toEqual({ delivered: true, via: 'clipboard' })
+    expect(bridge.replaceRange).not.toHaveBeenCalled()
+    expect(bridge.setSelectedText).not.toHaveBeenCalled()
+    expect(bridge.setValue).not.toHaveBeenCalled()
+  })
+
+  it('trusts a single paste on a decoy that never mirrors — delivered once, no conviction', async () => {
+    // The element keeps showing scratch after the paste. Scratch is not testimony: the paste is
+    // trusted rather than convicted, and exactly one write ever went out.
+    const bridge = fakeBridge({
+      readElementState: vi.fn(async () => textState({ value: '​​' }))
+    })
+    const captured = await capturedWith(bridge, SCRATCH_WEB)
+    expect(await captured.insert('into the canvas')).toEqual({
+      delivered: true,
+      via: 'clipboard'
+    })
+    expect(bridge.postPaste).toHaveBeenCalledTimes(1)
+  })
+
+  it('grants the accessibility rung to a web surface that shows real content', async () => {
+    const bridge = fakeBridge()
+    const captured = await capturedWith(bridge, {
+      value: 'an actual sentence',
+      numberOfCharacters: 18,
+      attributeNames: [...SCRATCH_WEB.attributeNames]
+    })
+    expect(await captured.insert(' more')).toEqual({ delivered: true, via: 'accessibility' })
+  })
+
+  it('keeps the full ladder for native controls, empty or not', async () => {
+    // No decoy has ever been measured outside web content; an empty NSTextView keeps its
+    // verified precise writes.
+    const bridge = fakeBridge()
+    const captured = await capturedWith(bridge, { value: '', numberOfCharacters: 0 })
+    expect(await captured.insert('hello')).toEqual({ delivered: true, via: 'accessibility' })
+  })
+
+  it('bounds replace-all on an untrusted surface to ONE write, flagged when unconfirmed', async () => {
+    const bridge = fakeBridge({
+      readElementState: vi.fn(async () => textState({ value: '​​' })),
+      setValue: vi.fn(async () => ({ ok: true, error: null, after: textState({ value: '​​' }) }))
+    })
+    const captured = await capturedWith(bridge, SCRATCH_WEB)
+    expect(await captured.insert('replace it all', { mode: 'all' })).toEqual({
+      delivered: false,
+      reason: 'unreadable-replace-all',
+      mayHaveLanded: true
+    })
+    expect(bridge.replaceRange).not.toHaveBeenCalled()
+    expect(bridge.setValue).toHaveBeenCalledTimes(1)
+    expect(bridge.postPaste).not.toHaveBeenCalled()
+  })
+
+  it('scratch never counts as paste evidence', () => {
+    expect(readCarriesEvidence(textState({ value: '​​' }), textState({ value: '​​' }))).toBe(false)
+    expect(readCarriesEvidence(textState({ value: '' }), textState({ value: '\n ​' }))).toBe(false)
+    expect(readCarriesEvidence(textState({ value: '​' }), textState({ value: 'real' }))).toBe(true)
   })
 })

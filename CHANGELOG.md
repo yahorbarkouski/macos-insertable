@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0
+
+The trust ladder: delivery is now safe under classification error, not merely after it.
+
+- A `readable` web element (browser DOM vocabulary present) whose value shows no real content
+  is untrusted: insertion is a single self-verifying paste instead of the Accessibility rungs.
+  Against a real empty field the paste creates its own evidence and verifies; against an
+  unrecognized Docs-like decoy it lands exactly once, trusted — no write cascade to tunnel, no
+  duplicate, no false refusal. Web fields earn the precise-write ladder by showing content;
+  native controls keep it unconditionally (no decoy has been measured outside web content).
+- Replace-all on an untrusted surface is bounded to one verified `setValue` attempt.
+- Drafts on untrusted web surfaces start splice-first: one verifiable write per update instead
+  of the two-tactic cascade, which is also faster there.
+- Failures that follow a write with unobservable effect — a posted paste the element would not
+  mirror, typing cut off mid-chunk, an unverified whole-field write — now carry
+  `mayHaveLanded: true`. Callers must not blind-retry on it; the text may already be there.
+- Scratch (zero-widths, whitespace) no longer counts as verification evidence anywhere: a decoy
+  holding two zero-width spaces can neither convict a paste nor pass for a landed write.
+- `FieldInfo.web` is public, alongside `valueCarriesEvidence`.
+
 ## 0.5.0
 
 - **`spacing: 'fit'`** on `insert`, and `fitSpacing(text, { before, after })` exported for

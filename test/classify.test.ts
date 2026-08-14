@@ -359,3 +359,19 @@ describe('classify', () => {
     })
   })
 })
+
+describe('web-content detection', () => {
+  it('marks elements carrying browser DOM vocabulary as web', () => {
+    for (const marker of ['ChromeAXNodeId', 'AXDOMIdentifier', 'AXDOMClassList']) {
+      const verdict = classify(
+        element({ attributeNames: ['AXRole', 'AXValue', 'AXSelectedTextRange', marker] }),
+        OPTIONS
+      )
+      expect(verdict, marker).toMatchObject({ field: { web: true } })
+    }
+  })
+
+  it('keeps native controls non-web', () => {
+    expect(classify(element(), OPTIONS)).toMatchObject({ field: { web: false } })
+  })
+})

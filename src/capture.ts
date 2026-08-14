@@ -7,7 +7,7 @@
 
 import { loadBridge } from './addon.js'
 import type { AppIdentity, NativeBridge, ScreenRect, SubmitModifier } from './bridge.js'
-import { buildIdentity, classify, isPlaceholderPhantom } from './classify.js'
+import { buildIdentity, classify, isPlaceholderPhantom, valueCarriesEvidence } from './classify.js'
 import { Draft } from './draft.js'
 import { insertInto } from './insert.js'
 import { waitForModifiersReleased } from './modifiers.js'
@@ -199,11 +199,21 @@ export class CapturedField {
     // later write treat the phantom as content and materialize it; the draft starts at zero
     // over nothing instead.
     if (isPlaceholderPhantom(state.value, this.#placeholder)) {
-      return { ok: true, draft: new Draft(bridge, this.#token, 0, '') }
+      return {
+        ok: true,
+        draft: new Draft(bridge, this.#token, 0, '', { preferSplice: this.#field.web })
+      }
     }
     const anchor = state.selectionStart
     const initial = state.value.slice(anchor, anchor + state.selectionLength)
-    return { ok: true, draft: new Draft(bridge, this.#token, anchor, initial) }
+    return {
+      ok: true,
+      draft: new Draft(bridge, this.#token, anchor, initial, {
+        // Untrusted web surface: bound each update to the one verifiable tactic. Evidence in
+        // the live value earns the two-tactic cascade back.
+        preferSplice: this.#field.web && !valueCarriesEvidence(state.value)
+      })
+    }
   }
 
   /**

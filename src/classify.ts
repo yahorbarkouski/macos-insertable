@@ -148,6 +148,24 @@ function isDecoyLike(element: RawFocusedElement): boolean {
 const SCRATCH_CHARACTERS = /[​‌﻿⁠￼\s]/g
 
 /**
+ * Attributes only browser engines put on their elements — Chromium's node id and the WebKit
+ * DOM vocabulary both engines expose. Web content is where every measured decoy lives, so this
+ * is the trust boundary: a web element must EARN the verified-write path by showing readable
+ * evidence, where a native control gets it from its role.
+ */
+const WEB_CONTENT_ATTRIBUTES = ['ChromeAXNodeId', 'AXDOMIdentifier', 'AXDOMClassList']
+
+/**
+ * Whether a value can bear witness to a write: real characters, not IME scratch. A field whose
+ * value is empty or scratch-only cannot distinguish "the write was inert" from "the write
+ * tunneled somewhere this element does not mirror" — and that ambiguity is what the delivery
+ * ladder's trust rules are built on.
+ */
+export function valueCarriesEvidence(value: string): boolean {
+  return value.replace(SCRATCH_CHARACTERS, '').length > 0
+}
+
+/**
  * Precise edits need both halves: readable text to verify a write against, and a settable
  * selection to write through. Missing either — or a decoy geometry that makes the "readable"
  * text a lie — means aimed trusted input, as for a canvas editor.
@@ -255,6 +273,7 @@ function buildFieldInfo(
   return {
     kind,
     surface,
+    web: WEB_CONTENT_ATTRIBUTES.some((name) => element.attributeNames.includes(name)),
     label: wellFormed(labelFor(element)),
     purposeHint: PURPOSE_SUBROLES[element.subrole] ?? '',
     multiline: kind !== 'field' || MULTILINE_ROLES.has(element.role) || value.includes('\n'),

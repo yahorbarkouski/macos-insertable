@@ -82,6 +82,17 @@ AppKit hands the caret vocabulary to everything, including read-only chat transc
 buttons, so a caret alone proves nothing. Both rules were checked against Chromium and WebKit
 source.
 
+**It assumes it will be wrong about web content, and bounds the damage.** Canvas editors like
+Google Docs focus decoy elements that carry everything a text field advertises while mirroring
+nothing — and against a decoy, an Accessibility write that "succeeds" with an unchanged
+read-back is undecidable: inert, or tunneled invisibly into the document. Chaining a fallback
+paste after a tunneled write is how text lands twice. So trust is earned, not assumed: a web
+element whose value shows no real content gets exactly one self-verifying paste — which creates
+its own evidence on a genuine field, and lands once, trusted, on a decoy the classifier has
+never seen. Precise verified writes are granted to native controls, and to web fields once they
+show readable content. When any write's effect could not be observed, the failure carries
+`mayHaveLanded: true`, which means: do not blind-retry, tell the user to look first.
+
 **It pins the field, then re-proves it.** The focused element is captured as a live reference
 inside the target app. Before every write the library confirms the same app is frontmost, the
 same element still holds focus, and its identity is unchanged. If any of that moved, the write
