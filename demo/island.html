@@ -13,6 +13,11 @@
     /* ink-dark, not neon: status tones that hold AA on the light surface */
     --good: oklch(0.52 0.14 150);
     --bad: oklch(0.5 0.18 27);
+    /* the card breathes with the verdict: same lightness, a whisper of chroma */
+    --background-good: oklch(0.96 0.016 150);
+    --line-good: oklch(0.85 0.03 150);
+    --background-bad: oklch(0.96 0.013 27);
+    --line-bad: oklch(0.85 0.028 27);
   }
   * { box-sizing: border-box; margin: 0; user-select: none; }
   html, body { background: transparent; }
@@ -34,7 +39,10 @@
     background: var(--background);
     border: 1px solid var(--line);
     box-shadow: 0 4px 16px oklch(0 0 0 / 0.12);
+    transition: background 0.25s, border-color 0.25s;
   }
+  .island.good { background: var(--background-good); border-color: var(--line-good); }
+  .island.bad { background: var(--background-bad); border-color: var(--line-bad); }
   header { display: flex; align-items: baseline; gap: 8px; }
   .verdict { font-size: 13px; font-weight: 500; }
   .app {
@@ -74,12 +82,12 @@
     min-height: 15px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .good { color: var(--good); }
-  .bad { color: var(--bad); }
+  .verdict.good, .log.good { color: var(--good); }
+  .verdict.bad, .log.bad { color: var(--bad); }
 </style>
 </head>
 <body>
-  <div class="island">
+  <div class="island" id="island">
     <header>
       <div class="verdict" id="verdict">Starting</div>
       <div class="app" id="app"></div>
@@ -95,6 +103,7 @@
   </div>
 
 <script>
+  const island = document.getElementById('island')
   const verdict = document.getElementById('verdict')
   const appEl = document.getElementById('app')
   const detail = document.getElementById('detail')
@@ -120,7 +129,9 @@
     const face = faces[state.status] ?? (() => [state.status, ''])
     const [text, tone] = face(state)
     verdict.textContent = state.secureInput ? 'Secure input active' : text
-    verdict.className = `verdict ${state.secureInput ? 'bad' : tone}`
+    const liveTone = state.secureInput ? 'bad' : tone
+    verdict.className = `verdict ${liveTone}`
+    island.className = `island ${liveTone}`
     appEl.textContent = state.app ?? ''
 
     if (state.field) {
