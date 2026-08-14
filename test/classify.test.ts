@@ -17,6 +17,26 @@ describe('classify', () => {
       expect(verdict).toMatchObject({ status: 'field', field: { kind } })
     })
 
+    it('recognises a Catalyst search field by its subrole', () => {
+      // Measured on WhatsApp: role AXStaticText, subrole AXSearchField, a live value and a
+      // working caret, nothing settable but the selection range. The subrole names the field;
+      // the unsettable value keeps the surface opaque (paste-only), which its box accepts.
+      const verdict = classify(
+        element({
+          role: 'AXStaticText',
+          subrole: 'AXSearchField',
+          valueSettable: false,
+          selectedTextSettable: false,
+          attributeNames: ['AXRole', 'AXValue', 'AXSelectedText', 'AXSelectedTextRange']
+        }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({
+        status: 'field',
+        field: { kind: 'field', surface: 'opaque', purposeHint: 'search' }
+      })
+    })
+
     it('recognises a text role even when the element advertises nothing else', () => {
       const verdict = classify(
         element({ role: 'AXTextField', attributeNames: ['AXRole'] }),

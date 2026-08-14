@@ -31,11 +31,23 @@ const TEXT_CONTENT_ATTRIBUTES = ['AXValue', 'AXSelectedText']
 const CARET_ATTRIBUTES = ['AXInsertionPointLineNumber', 'AXSelectedTextRange']
 
 /**
- * Chromium stamps these exactly on nodes inside editable content. They matter because Chromium
- * also hands the CARET vocabulary to everything — a chat transcript, a web area, even a button
- * advertises AXInsertionPointLineNumber and AXSelectedTextRange (selection exists for READING
- * there, measured against a live Electron app). So for a role-less container, a caret
- * attribute proves nothing by itself; editability must be evidenced separately.
+ * Editability evidence for a role-less container, because a caret attribute is not evidence.
+ *
+ * The caret vocabulary is everywhere: AppKit's modern accessibility bridge synthesizes
+ * AXInsertionPointLineNumber and AXSelectedTextRange onto every element of any app adopting it —
+ * a Finder button carries them, and so does a chat transcript in Electron, where selection
+ * exists for READING. It is not Chromium handing them out; Chromium's own list adds them only
+ * for text fields.
+ *
+ * Chromium DOES stamp these markers, from its shared platform-node layer, on every node with
+ * the editable state — whole contenteditable subtrees, focus-independent, since roughly M120.
+ * Older Chromium exposes none of them, which is why settability remains an accepted alternative.
+ *
+ * WebKit is the mirror image: it lists these markers on nearly every object (only web areas
+ * remove them), so there they prove nothing — and it is the caret clause that discriminates,
+ * since WebKit grants caret attributes only to real text controls. Safari's contenteditables
+ * arrive as AXTextArea and are caught by role before this rule is consulted at all. The
+ * conjunction survives both engines for opposite reasons.
  */
 const EDITABLE_MARKER_ATTRIBUTES = ['AXEditableAncestor', 'AXHighestEditableAncestor']
 
@@ -121,8 +133,10 @@ function surfaceFor(element: RawFocusedElement): 'readable' | 'opaque' {
 }
 
 /**
- * Unsettable is NOT read-only: browser-hosted editors expose nothing settable because their
- * content belongs to the renderer, yet they take typing and pasting fine. Settability is a
+ * Unsettable is NOT read-only. A container that reports nothing settable still takes typing and
+ * pasting — some web editors keep their content in the renderer and expose it that way, and old
+ * Chromium exposed no settability at all (current builds do report editable web fields as
+ * settable, so this rule protects fewer surfaces than it once did, not none). Settability is a
  * trustworthy read-only signal only for native controls matched by role; the caret requirement
  * already excludes text that cannot be edited at all.
  */
