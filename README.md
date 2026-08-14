@@ -421,6 +421,16 @@ macOS only today. The native surface is one deliberately platform-neutral interf
 `GetFocusedElement`/runtime-ids/`ValuePattern` map one-to-one onto the read/verify/write calls.
 Contributions welcome.
 
+## How this compares
+
+Ten open-source projects that insert text into macOS apps were read in full — Espanso, Handy,
+VoiceInk, Whispering, Vibe, OpenWhispr, Lirevo, Amical, Yap, fnkey. **None classifies the target
+before writing, verifies that the write landed, revises text in place, or returns a typed
+reason when it fails.** What that costs in practice, what they do better than us, and where
+their position is defensible: [`docs/comparison.md`](./docs/comparison.md). The underlying
+audit — including Chromium and WebKit source validation of the classifier — is
+[`docs/field-audit-2026-08.md`](./docs/field-audit-2026-08.md).
+
 ## License
 
 MIT

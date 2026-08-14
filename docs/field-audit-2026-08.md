@@ -1,5 +1,12 @@
 # Field audit — August 2026
 
+> **Status (0.4.0):** every numbered item below has been dispositioned. Adopted in 0.3.1–0.4.0:
+> editability evidence (1.2), decoy geometry and placeholder phantoms (1.4-adjacent, shipped as
+> 0.3.2/0.3.4), the Dvorak chord fix (1.1), `AXReplaceRangeWithText` (2.1), secure-input culprit
+> naming (2.2), `caretBounds()` (2.3), terminal traits (2.4), layout-resolved keycodes (2.5),
+> uncached trust reads (part of 2.6), `AXConfirm` submit and the modifier-release gate (2.10),
+> and the comment corrections (Part 5). Deferred with reasons in **Part 6**.
+
 Five parallel audits ran against this library: the Espanso injection engine (the most-deployed
 OSS injector), deep reads of Handy and VoiceInk, a survey of seven more active dictation apps
 (Whispering/Epicenter, Vibe, OpenWhispr, Lirevo, Amical, Yap, fnkey), a validation of the
@@ -299,6 +306,48 @@ is the robust check.
 | AX write settle | n/a elsewhere (nobody AX-writes) | 35ms (draft: native single retry) |
 | Modifier-release wait before injecting | Espanso: poll 100ms, 3s timeout | none (hold-to-talk hosts want this) |
 | Secure-input poll | Espanso 3s/1s; Handy 1s | on-demand |
+
+## Part 6 — Deferred, with reasons
+
+Not "someday" items — decisions, each with the evidence that would change it.
+
+**Receipt-sequenced clipboard restore (1.6).** The correct fix for restore timing: publish the
+text as a pasteboard *promise* (`declareTypes:owner:`) and treat `provideDataForType:` as proof
+the target read it. Deferred because the promise is serviced on the main run loop, and this
+library's whole point is working in hosts that have none — an unserviced promise means the
+target pastes *nothing*, which is worse than restoring early. Handy ships it debug-gated behind
+a fallback for the same reason. Revisit if we grow a run-loop thread for `AXObserver` (2.8), at
+which point both features share the infrastructure. Interim: the 300ms unverifiable settle,
+documented as a compromise.
+
+**`AXObserver` push events (2.8).** Same blocker: callbacks need a serviced CFRunLoop. Doing it
+properly means a dedicated `CFRunLoopRun` thread inside the addon with a thread-safe function
+back into JS — real work, and it changes the library's threading contract. The polling API
+(`reread`, and the draft's own precondition read) covers today's needs without it. Revisit when
+a consumer needs to react to focus loss *between* calls rather than at them.
+
+**Text-marker tier for Chromium caret placement (2.9).** Highest-risk item in the audit:
+version-pinned setter reachability, lazy trees, and per-app validation needed. Our drafts
+already work in Chromium via the value-splice tactic (0.3.3), which removed the urgency.
+Revisit if a measured surface needs caret placement we cannot otherwise reach.
+
+**Blind delivery into dormant-AX Electron (1.5).** The one where the field disagrees with us:
+Slack/Discord/VS Code often report no focused element, everyone else pastes blind, we refuse.
+The typed opt-in escape hatch is the right design, but it is a *product* decision about what a
+library should let callers do unverified, and it deserves its own release with explicit docs
+rather than being slipped into an adoption sweep. The refusal remains the default in every
+design considered.
+
+**Rich-content paste, smart spacing, revert-last-insert, per-app profiles (2.10 tail).** All
+genuinely useful, none load-bearing for correctness, and each is a public API surface that
+wants its own design pass. Smart spacing in particular is a *policy* (which characters join,
+which don't) that differs per product — the library exposes the primitives it needs (value +
+caret offset) and the recipe belongs in docs.
+
+**Device-dependent modifier bit (1.9) and the paste-chord inter-event delay.** Both are
+one-line changes with plausible upside and no reproduction on our hardware. They stay on the
+watch list: the first "pasted a bare v" or "Qt app ignored the chord" report makes them the
+first two things to try, in that order.
 
 ## Part 5 — Comment/doc corrections owed (small, in code owned elsewhere right now)
 
