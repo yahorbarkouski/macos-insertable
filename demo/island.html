@@ -103,7 +103,9 @@
   </div>
 
 <script>
-  const island = document.getElementById('island')
+  // Named `card`, not `island`: the preload bridge injects a global `island`, and a top-level
+  // const of the same name collides with it and kills the whole script.
+  const card = document.getElementById('island')
   const verdict = document.getElementById('verdict')
   const appEl = document.getElementById('app')
   const detail = document.getElementById('detail')
@@ -131,7 +133,7 @@
     verdict.textContent = state.secureInput ? 'Secure input active' : text
     const liveTone = state.secureInput ? 'bad' : tone
     verdict.className = `verdict ${liveTone}`
-    island.className = `island ${liveTone}`
+    card.className = `island ${liveTone}`
     appEl.textContent = state.app ?? ''
 
     if (state.field) {
