@@ -97,6 +97,10 @@ export class Draft {
   /** Where the last update parked the caret, or -1 while the caret is not ours to place —
    *  either before the first write, or after the user moved it away. */
   #expectedCaret = -1
+  /** Which swap tactic this element answers to, learned from the first delivered update:
+   *  Chromium silently ignores selected-text writes and needs the whole-value splice, AppKit
+   *  takes the O(edit) selected-text path. Discovery is paid once, not per update. */
+  #preferSplice = false
 
   constructor(bridge: NativeBridge, token: string, anchor: number, initialText: string) {
     this.#bridge = bridge
@@ -152,6 +156,7 @@ export class Draft {
         edit.replacement,
         this.#anchor + text.length,
         this.#expectedCaret,
+        this.#preferSplice ? 1 : 0,
         DRAFT_TIMEOUT_MS
       )
       .catch(() => null)
@@ -172,6 +177,7 @@ export class Draft {
     }
 
     this.#text = text
+    if (result.via === 'value-splice') this.#preferSplice = true
     // A skipped park means the user moved the caret; it stops being ours until they happen to
     // put it back where we would have left it.
     this.#expectedCaret = result.parked ? this.#anchor + text.length : this.#expectedCaret

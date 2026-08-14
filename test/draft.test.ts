@@ -117,7 +117,7 @@ function liveFieldBridge(initial: string, caret: number, selectionLength = 0): N
         expectedCaret: number
       ) => {
         if (value.slice(regionStart, regionStart + expected.length) !== expected) {
-          return { ok: false, reason: 'region-mismatch', parked: false }
+          return { ok: false, reason: 'region-mismatch', parked: false, via: null }
         }
         const caretIsOurs = expectedCaret < 0 || (selLength === 0 && selStart === expectedCaret)
         value =
@@ -129,7 +129,7 @@ function liveFieldBridge(initial: string, caret: number, selectionLength = 0): N
           selStart = parkAt
           parked = true
         }
-        return { ok: true, reason: null, parked }
+        return { ok: true, reason: null, parked, via: 'selected-text' }
       }
     )
   })
@@ -298,7 +298,8 @@ describe('Draft.update — the streaming transcription flow', () => {
     vi.mocked(bridge.casRangeEdit).mockResolvedValueOnce({
       ok: true,
       reason: null,
-      parked: false
+      parked: false,
+      via: 'selected-text'
     })
     await draft.update('hello there')
     await draft.update('hello there friend')
@@ -318,7 +319,8 @@ describe('Draft.update — refusals', () => {
     vi.mocked(bridge.casRangeEdit).mockResolvedValue({
       ok: false,
       reason: 'region-mismatch',
-      parked: false
+      parked: false,
+      via: null
     })
     expect(await draft.update('hello world again')).toEqual({
       delivered: false,
@@ -342,7 +344,8 @@ describe('Draft.update — refusals', () => {
     vi.mocked(bridge.casRangeEdit).mockResolvedValue({
       ok: false,
       reason: 'element-changed',
-      parked: false
+      parked: false,
+      via: null
     })
     expect(await draft.update('x')).toEqual({ delivered: false, reason: 'element-changed' })
   })
@@ -353,7 +356,8 @@ describe('Draft.update — refusals', () => {
     vi.mocked(bridge.casRangeEdit).mockResolvedValue({
       ok: false,
       reason: 'select-failed',
-      parked: false
+      parked: false,
+      via: null
     })
     expect(await draft.update('hello')).toEqual({
       delivered: false,

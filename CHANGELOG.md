@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.3
+
+- Drafts now work in Chromium/Electron fields. Two engine facts, both measured against a live
+  Chromium textarea: selection-range writes land ~10ms AFTER the same-trip read-back (every
+  placement looked failed), and `kAXSelectedTextAttribute` writes are a silent no-op (reported
+  success, text unchanged). The CAS trip now verifies placement and text on a mirror-settle
+  schedule, and carries a second swap tactic — splice the region into the whole value and
+  write that — with the winning tactic reported (`via`) and remembered per draft, so discovery
+  is paid once. Chromium streams at ~13–26ms per update; AppKit keeps its ~1ms selected-text
+  path (E2E re-proven, p50 1.1ms).
+- Demo: a failed stream no longer produces a false-green "scratched" line; added
+  `probe-draft.mjs` + `textarea-host.mjs`, a self-contained Chromium draft testbed (probing
+  one's own process crashes Chromium — the host is a separate instance).
+
 ## 0.3.2
 
 - Decoy geometry: `readFocusedElement` now reports the element's frame and display

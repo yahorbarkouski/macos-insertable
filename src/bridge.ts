@@ -78,6 +78,10 @@ export interface RawCasResult {
   /** Whether the caret was parked — false also when the user had moved it, which skips the
    *  park on purpose. */
   parked: boolean
+  /** Which swap tactic landed: 'selected-text' (O(edit)) or 'value-splice' (whole-value
+   *  rewrite, the tactic Chromium answers to). Null on failure. The caller passes this back
+   *  as preferSplice so discovery is paid once per element, not per update. */
+  via: string | null
 }
 
 /** Chat-style applications disagree on the send chord; the modifier is the caller's choice. */
@@ -140,6 +144,7 @@ export interface NativeBridge {
     replacement: string,
     parkAt: number,
     expectedCaret: number,
+    preferSplice: number,
     timeoutMs: number
   ): Promise<RawCasResult>
   setValue(

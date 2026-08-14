@@ -63,7 +63,7 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     const aim = await need().setSelectedTextRange('ax-does-not-exist', 0, 1, 100)
     expect(aim.ok).toBe(false)
     expect(aim.error).toBe('unknown-token')
-    const cas = await need().casRangeEdit('ax-does-not-exist', 0, 'x', 0, 1, 'y', -1, -1, 100)
+    const cas = await need().casRangeEdit('ax-does-not-exist', 0, 'x', 0, 1, 'y', -1, -1, 0, 100)
     expect(cas.ok).toBe(false)
     expect(cas.reason).toBe('element-gone')
   })

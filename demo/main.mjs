@@ -178,7 +178,13 @@ const actions = {
         return
       }
       for (const partial of ['umm wait', 'umm wait this is', 'umm wait this is wrong']) {
-        await started.draft.update(partial)
+        const result = await started.draft.update(partial)
+        if (!result.delivered) {
+          // Without this check a failed stream leaves an empty draft, and the final update('')
+          // is a free no-op that would report a green "scratched" for text that never appeared.
+          log(`scratch stream stopped: ${result.reason}`, 'bad')
+          return
+        }
         await wait(260)
       }
       await wait(600)

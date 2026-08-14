@@ -76,6 +76,13 @@ constexpr size_t kMaxTypeUnits = 2000;
 // synthetic events arrive with no gap at all.
 constexpr useconds_t kTypeChunkDelayUs = 1200;
 
+// Settle schedule for reads that verify a write. Chromium-backed views accept a write and
+// mirror it asynchronously — measured: a selection set reads back stale in the same trip and
+// lands ~10ms later — while AppKit answers in-trip. The first retry is sized for Chromium's
+// common case so successful verifies cost ~10ms there and 0ms on AppKit.
+constexpr useconds_t kMirrorSettleUs[] = {10 * 1000, 35 * 1000, 35 * 1000};
+constexpr int kMirrorSettleSteps = 3;
+
 // Total bytes a snapshot may hold. A pasteboard over this is not borrowed at all — keeping a
 // 50 MB image alive for the length of a paste is not worth it.
 constexpr NSUInteger kMaxSnapshotBytes = 16 * 1024 * 1024;
@@ -741,7 +748,7 @@ class CasRangeEditWorker : public PromiseWorker {
   CasRangeEditWorker(Napi::Env env, std::string token, CFIndex regionStart,
                      std::u16string expected, CFIndex editStart, CFIndex editEnd,
                      std::u16string replacement, CFIndex parkAt, CFIndex expectedCaret,
-                     double timeoutMs)
+                     bool preferSplice, double timeoutMs)
       : PromiseWorker(env),
         token_(std::move(token)),
         regionStart_(regionStart),
@@ -751,6 +758,7 @@ class CasRangeEditWorker : public PromiseWorker {
         replacement_(std::move(replacement)),
         parkAt_(parkAt),
         expectedCaret_(expectedCaret),
+        preferSplice_(preferSplice),
         timeoutMs_(timeoutMs) {}
 
   void Execute() override {
@@ -808,29 +816,23 @@ class CasRangeEditWorker : public PromiseWorker {
     AXError selectError =
         AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute, editValue);
     CFRelease(editValue);
-    CFRange placed = CFRangeMake(-1, -1);
-    if (selectError != kAXErrorSuccess ||
-        !CopyAxRange(element, kAXSelectedTextRangeAttribute, &placed) ||
-        placed.location != editRange.location || placed.length != editRange.length) {
+    if (selectError != kAXErrorSuccess) {
       CFRelease(element);
       reason_ = "select-failed";
       return;
     }
-
-    CFStringRef replacementValue = CFStringCreateWithCharacters(
-        kCFAllocatorDefault, reinterpret_cast<const UniChar*>(replacement_.data()),
-        static_cast<CFIndex>(replacement_.size()));
-    if (!replacementValue) {
-      CFRelease(element);
-      reason_ = "write-failed";
-      return;
+    // Placement must be read back on the mirror-settle schedule: Chromium reports the OLD
+    // selection in the same trip and lands the new one moments later.
+    bool placedOk = false;
+    for (int attempt = 0; attempt <= kMirrorSettleSteps && !placedOk; attempt += 1) {
+      if (attempt > 0) usleep(kMirrorSettleUs[attempt - 1]);
+      CFRange placed = CFRangeMake(-1, -1);
+      placedOk = CopyAxRange(element, kAXSelectedTextRangeAttribute, &placed) &&
+                 placed.location == editRange.location && placed.length == editRange.length;
     }
-    AXError writeError =
-        AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute, replacementValue);
-    CFRelease(replacementValue);
-    if (writeError != kAXErrorSuccess) {
+    if (!placedOk) {
       CFRelease(element);
-      reason_ = "write-failed";
+      reason_ = "select-failed";
       return;
     }
 
@@ -840,12 +842,39 @@ class CasRangeEditWorker : public PromiseWorker {
     finalRegion += replacement_;
     finalRegion += expected_.substr(static_cast<size_t>(editEnd_));
 
-    bool landed = RegionEquals(element, regionStart_, finalRegion);
+    bool landed = false;
+    if (!preferSplice_) {
+      CFStringRef replacementValue = CFStringCreateWithCharacters(
+          kCFAllocatorDefault, reinterpret_cast<const UniChar*>(replacement_.data()),
+          static_cast<CFIndex>(replacement_.size()));
+      if (!replacementValue) {
+        CFRelease(element);
+        reason_ = "write-failed";
+        return;
+      }
+      AXError writeError =
+          AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute, replacementValue);
+      CFRelease(replacementValue);
+      // Quick check only — immediate plus one short settle. Exhausting the full schedule here
+      // would bill every update in an engine that ignores this attribute for the discovery.
+      if (writeError == kAXErrorSuccess) {
+        for (int attempt = 0; attempt < 2 && !landed; attempt += 1) {
+          if (attempt > 0) usleep(kMirrorSettleUs[0]);
+          landed = RegionEquals(element, regionStart_, finalRegion);
+        }
+      }
+      if (landed) via_ = "selected-text";
+    }
+
     if (!landed) {
-      // One blocking settle: Chromium-backed views round-trip to their renderer and briefly
-      // read as the OLD text. The worker thread is the right place to wait it out.
-      usleep(35 * 1000);
-      landed = RegionEquals(element, regionStart_, finalRegion);
+      // Second swap tactic, same contract: Chromium accepts selection-range and whole-value
+      // writes but silently ignores kAXSelectedTextAttribute (measured — reported success,
+      // text unchanged). Splice the region into the full value and write THAT. Costs
+      // O(document) payload where the first tactic is O(edit), which is why it is the
+      // fallback — and why the caller can pass preferSplice once it learns which tactic the
+      // target answers to.
+      landed = SpliceValueAndVerify(element, finalRegion);
+      if (landed) via_ = "value-splice";
     }
     if (!landed) {
       CFRelease(element);
@@ -873,10 +902,61 @@ class CasRangeEditWorker : public PromiseWorker {
     result.Set("reason",
                reason_.empty() ? env.Null() : Napi::String::New(env, reason_).As<Napi::Value>());
     result.Set("parked", Napi::Boolean::New(env, parked_));
+    result.Set("via",
+               via_.empty() ? env.Null() : Napi::String::New(env, via_).As<Napi::Value>());
     deferred_.Resolve(result);
   }
 
  private:
+  /**
+   * Rewrites the whole value with the draft region replaced by `finalRegion`, verifying on the
+   * settle schedule. The full value is re-read HERE, in the same worker as the precondition,
+   * so text outside the region is the freshest readable state.
+   */
+  bool SpliceValueAndVerify(AXUIElementRef element, const std::u16string& finalRegion) {
+    CFTypeRef current = NULL;
+    if (AXUIElementCopyAttributeValue(element, kAXValueAttribute, &current) != kAXErrorSuccess ||
+        !current) {
+      return false;
+    }
+    if (CFGetTypeID(current) != CFStringGetTypeID()) {
+      CFRelease(current);
+      return false;
+    }
+    CFStringRef value = static_cast<CFStringRef>(current);
+    CFIndex length = CFStringGetLength(value);
+    CFIndex regionEnd = regionStart_ + static_cast<CFIndex>(expected_.size());
+    if (regionStart_ > length || regionEnd > length) {
+      CFRelease(value);
+      return false;
+    }
+
+    std::u16string whole(static_cast<size_t>(length), u'\0');
+    CFStringGetCharacters(value, CFRangeMake(0, length),
+                          reinterpret_cast<UniChar*>(whole.data()));
+    CFRelease(value);
+    // The region must still hold what the precondition saw — the splice is positional, and a
+    // mid-flight edit would make these offsets someone else's text.
+    if (whole.compare(static_cast<size_t>(regionStart_), expected_.size(), expected_) != 0) {
+      return false;
+    }
+    whole.replace(static_cast<size_t>(regionStart_), expected_.size(), finalRegion);
+
+    CFStringRef next = CFStringCreateWithCharacters(
+        kCFAllocatorDefault, reinterpret_cast<const UniChar*>(whole.data()),
+        static_cast<CFIndex>(whole.size()));
+    if (!next) return false;
+    AXError wrote = AXUIElementSetAttributeValue(element, kAXValueAttribute, next);
+    CFRelease(next);
+    if (wrote != kAXErrorSuccess) return false;
+
+    for (int attempt = 0; attempt <= kMirrorSettleSteps; attempt += 1) {
+      if (attempt > 0) usleep(kMirrorSettleUs[attempt - 1]);
+      if (RegionEquals(element, regionStart_, finalRegion)) return true;
+    }
+    return false;
+  }
+
   std::string token_;
   CFIndex regionStart_;
   std::u16string expected_;
@@ -885,10 +965,12 @@ class CasRangeEditWorker : public PromiseWorker {
   std::u16string replacement_;
   CFIndex parkAt_;
   CFIndex expectedCaret_;
+  bool preferSplice_;
   double timeoutMs_;
   bool ok_ = false;
   bool parked_ = false;
   std::string reason_;
+  std::string via_;
 };
 
 /**
@@ -926,8 +1008,18 @@ class SetSelectionRangeWorker : public PromiseWorker {
     CFRelease(value);
     ok_ = result == kAXErrorSuccess;
     if (!ok_) error_ = "ax-error-" + std::to_string(static_cast<int>(result));
+    // Read back on the mirror-settle schedule: Chromium reports the OLD selection in the same
+    // trip; without the settle every placement looks failed there.
     CFRange after = CFRangeMake(0, 0);
-    hasAfter_ = CopyAxRange(element, kAXSelectedTextRangeAttribute, &after);
+    for (int attempt = 0; attempt <= kMirrorSettleSteps; attempt += 1) {
+      if (attempt > 0) usleep(kMirrorSettleUs[attempt - 1]);
+      hasAfter_ = CopyAxRange(element, kAXSelectedTextRangeAttribute, &after);
+      if (hasAfter_ && after.location == static_cast<CFIndex>(start_) &&
+          after.length == static_cast<CFIndex>(length_)) {
+        break;
+      }
+      if (!ok_) break;
+    }
     afterStart_ = static_cast<long>(after.location);
     afterLength_ = static_cast<long>(after.length);
     CFRelease(element);
@@ -1188,10 +1280,10 @@ Napi::Value CasRangeEdit(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number, ArgKind::String, ArgKind::Number,
                         ArgKind::Number, ArgKind::String, ArgKind::Number, ArgKind::Number,
-                        ArgKind::Number})) {
+                        ArgKind::Number, ArgKind::Number})) {
     return RejectBadArgs(env,
                          "casRangeEdit(token, regionStart, expected, editStart, editEnd, "
-                         "replacement, parkAt, expectedCaret, timeoutMs)");
+                         "replacement, parkAt, expectedCaret, preferSplice, timeoutMs)");
   }
   auto* worker = new CasRangeEditWorker(
       env, info[0].As<Napi::String>().Utf8Value(),
@@ -1202,7 +1294,8 @@ Napi::Value CasRangeEdit(const Napi::CallbackInfo& info) {
       info[5].As<Napi::String>().Utf16Value(),
       static_cast<CFIndex>(info[6].As<Napi::Number>().Int64Value()),
       static_cast<CFIndex>(info[7].As<Napi::Number>().Int64Value()),
-      info[8].As<Napi::Number>().DoubleValue());
+      info[8].As<Napi::Number>().Int64Value() != 0,
+      info[9].As<Napi::Number>().DoubleValue());
   worker->Queue();
   return worker->Promise();
 }
