@@ -178,13 +178,18 @@ function buildFieldInfo(
   const surface = surfaceFor(element)
   const readable = surface === 'readable'
 
+  // Rich composers render their placeholder as literal text in the accessibility value while
+  // empty. That text is decoration, not content — reporting it as the field's value hands
+  // callers a phantom document.
+  const phantomValue = element.placeholder !== '' && element.value === element.placeholder
+
   // An opaque element's text is not the document; presenting IME scratch as content is how a
   // caller ends up "verifying" against a decoy.
-  const value = readable ? wellFormed(element.value).slice(0, maxValueChars) : ''
-  const selectedText = readable ? wellFormed(element.selectedText) : ''
+  const value = readable && !phantomValue ? wellFormed(element.value).slice(0, maxValueChars) : ''
+  const selectedText = readable && !phantomValue ? wellFormed(element.selectedText) : ''
 
   const hasSelection =
-    readable && element.selectionStart !== null && element.selectionLength !== null
+    readable && !phantomValue && element.selectionStart !== null && element.selectionLength !== null
   const selectionStart = hasSelection ? element.selectionStart : null
   const selectionEnd =
     hasSelection && element.selectionStart !== null && element.selectionLength !== null

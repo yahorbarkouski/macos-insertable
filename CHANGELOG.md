@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4
+
+- Placeholders no longer materialize. Rich composers render their placeholder as literal text
+  in the accessibility value while empty; the value-splice tactic preserved it as "surrounding
+  text", typing the placeholder into the document ahead of the stream. When the whole value
+  equals the element's declared `AXPlaceholderValue`, the splice now starts from empty — and
+  classification blanks the phantom out of `field.value`, so callers never mistake decoration
+  for content. Reproduced and proven clean by `demo/probe-draft.mjs placeholder`.
+
 ## 0.3.3
 
 - Drafts now work in Chromium/Electron fields. Two engine facts, both measured against a live

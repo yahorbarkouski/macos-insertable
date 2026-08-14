@@ -145,6 +145,21 @@ describe('classify', () => {
       expect(verdict).toMatchObject({ field: { surface: 'opaque' } })
     })
 
+    it('blanks a value that is exactly the declared placeholder — decoration, not content', () => {
+      const verdict = classify(
+        element({ value: 'Ask anything…', placeholder: 'Ask anything…', selectionStart: 0 }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({
+        field: { surface: 'readable', value: '', selectionStart: null }
+      })
+    })
+
+    it('keeps a real value that merely matches no placeholder', () => {
+      const verdict = classify(element({ value: 'Ask anything…', placeholder: '' }), OPTIONS)
+      expect(verdict).toMatchObject({ field: { value: 'Ask anything…' } })
+    })
+
     it('withholds an opaque element’s text — scratch is not the document', () => {
       const verdict = classify(
         element({ hasValue: false, value: 'ime scratch', selectedText: 'scr', selectionStart: 1 }),

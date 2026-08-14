@@ -924,6 +924,44 @@ class CasRangeEditWorker : public PromiseWorker {
       return false;
     }
     CFStringRef value = static_cast<CFStringRef>(current);
+
+    // Rich composers render their placeholder as literal text in the accessibility value while
+    // the field is empty. Preserving that as "surrounding text" would MATERIALIZE the
+    // placeholder into the document — the app's own input path clears it, a raw value write
+    // does not. When the whole value equals the element's declared placeholder, the real
+    // content is empty and the splice starts from empty.
+    CFTypeRef placeholderRef = NULL;
+    bool valueIsPlaceholder = false;
+    if (CFStringGetLength(value) > 0 &&
+        AXUIElementCopyAttributeValue(element, CFSTR("AXPlaceholderValue"), &placeholderRef) ==
+            kAXErrorSuccess &&
+        placeholderRef) {
+      if (CFGetTypeID(placeholderRef) == CFStringGetTypeID()) {
+        valueIsPlaceholder =
+            CFStringCompare(value, static_cast<CFStringRef>(placeholderRef), 0) ==
+            kCFCompareEqualTo;
+      }
+      CFRelease(placeholderRef);
+    }
+    if (valueIsPlaceholder) {
+      CFRelease(value);
+      // Phantom-relative offsets would splice into text that is not really there; the draft's
+      // coordinates are only meaningful against empty content when it starts at zero.
+      if (regionStart_ != 0 || !expected_.empty()) return false;
+      CFStringRef next = CFStringCreateWithCharacters(
+          kCFAllocatorDefault, reinterpret_cast<const UniChar*>(finalRegion.data()),
+          static_cast<CFIndex>(finalRegion.size()));
+      if (!next) return false;
+      AXError wrote = AXUIElementSetAttributeValue(element, kAXValueAttribute, next);
+      CFRelease(next);
+      if (wrote != kAXErrorSuccess) return false;
+      for (int attempt = 0; attempt <= kMirrorSettleSteps; attempt += 1) {
+        if (attempt > 0) usleep(kMirrorSettleUs[attempt - 1]);
+        if (RegionEquals(element, 0, finalRegion)) return true;
+      }
+      return false;
+    }
+
     CFIndex length = CFStringGetLength(value);
     CFIndex regionEnd = regionStart_ + static_cast<CFIndex>(expected_.size());
     if (regionStart_ > length || regionEnd > length) {
