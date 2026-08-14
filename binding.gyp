@@ -28,7 +28,8 @@
                 "-framework ApplicationServices",
                 "-framework Carbon",
                 "-framework CoreGraphics",
-                "-framework CoreFoundation"
+                "-framework CoreFoundation",
+                "-framework IOKit"
               ]
             }
           }

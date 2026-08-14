@@ -204,7 +204,7 @@ app.whenReady().then(() => {
   app.dock?.hide()
   window = new BrowserWindow({
     width: 320,
-    height: 148,
+    height: 184,
     frame: false,
     transparent: true,
     resizable: false,

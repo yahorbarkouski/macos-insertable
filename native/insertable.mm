@@ -1158,6 +1158,209 @@ class ReadStateWorker : public PromiseWorker {
   TextState state_;
 };
 
+/**
+ * The on-screen rectangle of a text range — a zero-length range at the caret returns the caret's
+ * own rectangle. Lets a caller anchor UI (a HUD, ghost text, a correction popover) to the exact
+ * insertion point. `AXBoundsForRange` answers in global screen coordinates on AppKit and web
+ * content alike; when the element exposes no range at the caret, the last glyph's trailing edge
+ * keeps real line height where an empty-caret rectangle would collapse to nothing.
+ */
+class CaretBoundsWorker : public PromiseWorker {
+ public:
+  CaretBoundsWorker(Napi::Env env, std::string token, double timeoutMs)
+      : PromiseWorker(env), token_(std::move(token)), timeoutMs_(timeoutMs) {}
+
+  void Execute() override {
+    AXUIElementRef element = ElementRegistry::Shared().Copy(token_);
+    if (!element) return;
+    ApplyTimeout(element, timeoutMs_);
+
+    CFRange selection = CFRangeMake(0, 0);
+    bool haveSelection = CopyAxRange(element, kAXSelectedTextRangeAttribute, &selection);
+    long caret = haveSelection ? selection.location : 0;
+
+    if (BoundsForRange(element, CFRangeMake(caret, 0), &rect_)) {
+      found_ = true;
+    } else if (caret > 0 && BoundsForRange(element, CFRangeMake(caret - 1, 1), &rect_)) {
+      // A collapsed caret range was refused; the previous glyph's box carries the line height.
+      rect_.origin.x += rect_.size.width;
+      rect_.size.width = 0;
+      found_ = true;
+    }
+    CFRelease(element);
+  }
+
+  void OnOK() override {
+    Napi::Env env = Env();
+    if (!found_) {
+      deferred_.Resolve(env.Null());
+      return;
+    }
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("x", Napi::Number::New(env, rect_.origin.x));
+    result.Set("y", Napi::Number::New(env, rect_.origin.y));
+    result.Set("width", Napi::Number::New(env, rect_.size.width));
+    result.Set("height", Napi::Number::New(env, rect_.size.height));
+    deferred_.Resolve(result);
+  }
+
+ private:
+  static bool BoundsForRange(AXUIElementRef element, CFRange range, CGRect* out) {
+    AXValueRef rangeValue = AXValueCreate(kAXValueTypeCFRange, &range);
+    if (!rangeValue) return false;
+    CFTypeRef result = NULL;
+    AXError error = AXUIElementCopyParameterizedAttributeValue(
+        element, kAXBoundsForRangeParameterizedAttribute, rangeValue, &result);
+    CFRelease(rangeValue);
+    if (error != kAXErrorSuccess || !result) return false;
+    bool ok = CFGetTypeID(result) == AXValueGetTypeID() &&
+              AXValueGetType(static_cast<AXValueRef>(result)) == kAXValueTypeCGRect &&
+              AXValueGetValue(static_cast<AXValueRef>(result), kAXValueTypeCGRect, out);
+    CFRelease(result);
+    return ok;
+  }
+
+  std::string token_;
+  double timeoutMs_;
+  bool found_ = false;
+  CGRect rect_ = CGRectZero;
+};
+
+/**
+ * Replaces a text range in one native call via the AXReplaceRangeWithText parameterized
+ * attribute. On AppKit this routes through the focused element's input context — the same
+ * insertText:replacementRange: path IMEs and Dictation use, so it coalesces into native undo and
+ * fires the delegate/formatter notifications a raw value write skips; on WebKit it is a
+ * first-class editing command. Chromium does not implement it (advertised but inert), so the
+ * caller keeps this above the two-step selection write only as a preference and falls through on
+ * failure.
+ *
+ * The parameter dictionary keys are exact and load-bearing: a wrong key decodes to an empty
+ * range and DELETES the target while still reporting success. The result is a CFBoolean, so the
+ * caller verifies by read-back regardless.
+ */
+class ReplaceRangeWorker : public PromiseWorker {
+ public:
+  ReplaceRangeWorker(Napi::Env env, std::string token, CFIndex start, CFIndex length,
+                     std::u16string text, double timeoutMs)
+      : PromiseWorker(env),
+        token_(std::move(token)),
+        start_(start),
+        length_(length),
+        text_(std::move(text)),
+        timeoutMs_(timeoutMs) {}
+
+  void Execute() override {
+    AXUIElementRef element = ElementRegistry::Shared().Copy(token_);
+    if (!element) {
+      error_ = "element-gone";
+      return;
+    }
+    ApplyTimeout(element, timeoutMs_);
+
+    CFRange range = CFRangeMake(start_, length_);
+    AXValueRef rangeValue = AXValueCreate(kAXValueTypeCFRange, &range);
+    CFStringRef replacement = CFStringCreateWithCharacters(
+        kCFAllocatorDefault, reinterpret_cast<const UniChar*>(text_.data()),
+        static_cast<CFIndex>(text_.size()));
+    if (!rangeValue || !replacement) {
+      if (rangeValue) CFRelease(rangeValue);
+      if (replacement) CFRelease(replacement);
+      CFRelease(element);
+      error_ = "encoding-failed";
+      return;
+    }
+
+    CFTypeRef keys[] = {CFSTR("AXReplacementRange"), CFSTR("AXReplacementText")};
+    CFTypeRef values[] = {rangeValue, replacement};
+    CFDictionaryRef params =
+        CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+                           &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFTypeRef result = NULL;
+    AXError error = AXUIElementCopyParameterizedAttributeValue(
+        element, CFSTR("AXReplaceRangeWithText"), params, &result);
+    CFRelease(params);
+    CFRelease(rangeValue);
+    CFRelease(replacement);
+
+    if (error == kAXErrorSuccess && result) {
+      ok_ = CFGetTypeID(result) == CFBooleanGetTypeID() &&
+            CFBooleanGetValue(static_cast<CFBooleanRef>(result));
+    }
+    if (result) CFRelease(result);
+    if (!ok_) error_ = "unsupported";
+    CFRelease(element);
+  }
+
+  void OnOK() override {
+    Napi::Env env = Env();
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("ok", Napi::Boolean::New(env, ok_));
+    result.Set("error",
+               error_.empty() ? env.Null() : Napi::String::New(env, error_).As<Napi::Value>());
+    deferred_.Resolve(result);
+  }
+
+ private:
+  std::string token_;
+  CFIndex start_;
+  CFIndex length_;
+  std::u16string text_;
+  double timeoutMs_;
+  bool ok_ = false;
+  std::string error_;
+};
+
+/**
+ * Performs the element's AXConfirm action — the accessibility "commit this field" verb some
+ * single-line controls expose, a keystroke-free alternative to posting Return. Resolves whether
+ * the element advertised the action and it succeeded; the caller keeps the Return chord as the
+ * fallback for the many fields (multiline text areas among them) that expose no such action.
+ */
+class ConfirmWorker : public PromiseWorker {
+ public:
+  ConfirmWorker(Napi::Env env, std::string token, double timeoutMs)
+      : PromiseWorker(env), token_(std::move(token)), timeoutMs_(timeoutMs) {}
+
+  void Execute() override {
+    AXUIElementRef element = ElementRegistry::Shared().Copy(token_);
+    if (!element) return;
+    ApplyTimeout(element, timeoutMs_);
+
+    CFArrayRef actions = NULL;
+    if (AXUIElementCopyActionNames(element, &actions) == kAXErrorSuccess && actions) {
+      CFIndex count = CFArrayGetCount(actions);
+      for (CFIndex i = 0; i < count && !advertised_; i += 1) {
+        CFTypeRef entry = CFArrayGetValueAtIndex(actions, i);
+        if (entry && CFGetTypeID(entry) == CFStringGetTypeID() &&
+            CFStringCompare(static_cast<CFStringRef>(entry), kAXConfirmAction, 0) ==
+                kCFCompareEqualTo) {
+          advertised_ = true;
+        }
+      }
+      CFRelease(actions);
+    }
+    if (advertised_) {
+      ok_ = AXUIElementPerformAction(element, kAXConfirmAction) == kAXErrorSuccess;
+    }
+    CFRelease(element);
+  }
+
+  void OnOK() override {
+    Napi::Env env = Env();
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("ok", Napi::Boolean::New(env, ok_));
+    result.Set("advertised", Napi::Boolean::New(env, advertised_));
+    deferred_.Resolve(result);
+  }
+
+ private:
+  std::string token_;
+  double timeoutMs_;
+  bool advertised_ = false;
+  bool ok_ = false;
+};
+
 /** Types text as synthetic Unicode key events, chunked, with a gap apps' input handling tolerates. */
 class TypeUnicodeWorker : public PromiseWorker {
  public:
@@ -1249,7 +1452,10 @@ Napi::Value SecureInputCulprit(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (!IsSecureEventInputEnabled()) return env.Null();
 
-  io_registry_entry_t root = IORegistryGetRootEntry(kIOMainPortDefault);
+  // kIOMainPortDefault is macOS 12+; the deployment target is 11. Both spellings are the same
+  // NULL-equivalent default port, so passing 0 works on every supported version without an
+  // availability guard around the call.
+  io_registry_entry_t root = IORegistryGetRootEntry(MACH_PORT_NULL);
   if (!root) return env.Null();
   CFTypeRef users =
       IORegistryEntryCreateCFProperty(root, CFSTR("IOConsoleUsers"), kCFAllocatorDefault, 0);
@@ -1407,6 +1613,43 @@ Napi::Value SetSelectedTextRange(const Napi::CallbackInfo& info) {
       static_cast<long>(info[1].As<Napi::Number>().Int64Value()),
       static_cast<long>(info[2].As<Napi::Number>().Int64Value()),
       info[3].As<Napi::Number>().DoubleValue());
+  worker->Queue();
+  return worker->Promise();
+}
+
+Napi::Value CaretBounds(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number})) {
+    return RejectBadArgs(env, "caretBounds(token, timeoutMs)");
+  }
+  auto* worker = new CaretBoundsWorker(env, info[0].As<Napi::String>().Utf8Value(),
+                                       info[1].As<Napi::Number>().DoubleValue());
+  worker->Queue();
+  return worker->Promise();
+}
+
+Napi::Value ReplaceRange(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number, ArgKind::Number, ArgKind::String,
+                        ArgKind::Number})) {
+    return RejectBadArgs(env, "replaceRange(token, start, length, text, timeoutMs)");
+  }
+  auto* worker = new ReplaceRangeWorker(
+      env, info[0].As<Napi::String>().Utf8Value(),
+      static_cast<CFIndex>(info[1].As<Napi::Number>().Int64Value()),
+      static_cast<CFIndex>(info[2].As<Napi::Number>().Int64Value()),
+      info[3].As<Napi::String>().Utf16Value(), info[4].As<Napi::Number>().DoubleValue());
+  worker->Queue();
+  return worker->Promise();
+}
+
+Napi::Value ConfirmElement(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number})) {
+    return RejectBadArgs(env, "confirmElement(token, timeoutMs)");
+  }
+  auto* worker = new ConfirmWorker(env, info[0].As<Napi::String>().Utf8Value(),
+                                   info[1].As<Napi::Number>().DoubleValue());
   worker->Queue();
   return worker->Promise();
 }
@@ -1726,6 +1969,11 @@ Napi::Value ReleaseElement(const Napi::CallbackInfo& info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("isAccessibilityTrusted", Napi::Function::New(env, IsAccessibilityTrusted));
   exports.Set("isSecureInputEnabled", Napi::Function::New(env, IsSecureInputEnabled));
+  exports.Set("secureInputCulprit", Napi::Function::New(env, SecureInputCulprit));
+  exports.Set("currentModifierFlags", Napi::Function::New(env, CurrentModifierFlags));
+  exports.Set("caretBounds", Napi::Function::New(env, CaretBounds));
+  exports.Set("replaceRange", Napi::Function::New(env, ReplaceRange));
+  exports.Set("confirmElement", Napi::Function::New(env, ConfirmElement));
   exports.Set("frontmostApp", Napi::Function::New(env, FrontmostApp));
   exports.Set("readFocusedElement", Napi::Function::New(env, ReadFocusedElement));
   exports.Set("readElementState", Napi::Function::New(env, ReadElementState));
