@@ -22,6 +22,14 @@ const pages = {
   staticfocus:
     '<div id="t" tabindex="0" style="width:480px;height:240px;font:14px monospace">just some readable text, focusable but not editable</div>' +
     '<script>document.getElementById("t").focus()</script>',
+  // A Google-Docs-shaped decoy: a contenteditable strip one pixel tall and full width, holding
+  // two zero-width spaces — the measured signature of the real thing. Pastes land in it (it is
+  // a genuine contenteditable), but no human-usable box exists.
+  docsdecoy:
+    '<div id="t" contenteditable="true" aria-label="Document content" ' +
+    'style="width:625px;height:1px;overflow:hidden;font:14px monospace">​​</div>' +
+    '<script>const t=document.getElementById("t");t.focus();' +
+    'const sel=getSelection();sel.collapse(t.firstChild,2)</script>',
   // The variant that escaped the exact-equality guard: the contenteditable keeps a trailing
   // <br>, so the accessibility value reads "Ask anything…\n" — placeholder plus artifact —
   // and the caret parks INSIDE the phantom.
@@ -40,7 +48,11 @@ const pages = {
 app.whenReady().then(async () => {
   app.setAccessibilitySupportEnabled(true)
   const window = new BrowserWindow({ width: 520, height: 300, show: true })
-  await window.loadURL(`data:text/html,${encodeURIComponent(pages[mode] ?? pages.textarea)}`)
+  // charset is load-bearing: without it Chromium decodes the percent-escapes as Latin-1 and
+  // every multi-byte character (zero-width spaces, ellipses) becomes mojibake.
+  await window.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(pages[mode] ?? pages.textarea)}`
+  )
   setTimeout(() => {
     if (readyPath) writeFileSync(readyPath, `READY ${process.pid}\n`)
     console.log(`READY ${process.pid}`)

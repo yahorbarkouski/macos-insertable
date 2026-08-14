@@ -105,6 +105,32 @@ describe.skipIf(!runnable).sequential('end-to-end against a live Chromium field'
   )
 })
 
+describe.skipIf(!runnable).sequential('the Google-Docs-shaped strip decoy', () => {
+  it('classifies opaque and delivers exactly once, via clipboard', async () => {
+    // The measured Docs signature: full-width, one pixel tall, scratch-only value. Classified
+    // readable, AX writes tunneled into the document and the fallback paste landed a SECOND
+    // copy, reported as failure. Opaque classification retires the whole chain: one paste,
+    // trusted, no rung-1 writes to double it.
+    const pid = await startHost('docsdecoy')
+    using captured = await captureHost(pid)
+    expect(captured.field.surface).toBe('opaque')
+    expect(captured.field.value).toBe('')
+
+    const inserted = await captured.insert('landed once ')
+    expect(inserted).toEqual({ delivered: true, via: 'clipboard' })
+
+    // Read the raw element (the strip is a real contenteditable, so the paste is visible in
+    // its value) and count occurrences: exactly one.
+    const bridge = loadBridge()
+    if (!bridge) throw new Error('bridge missing')
+    const raw = await bridge.readFocusedElement(pid, 500, 4000)
+    if (!raw) throw new Error('strip not readable raw')
+    const occurrences = raw.value.split('landed once').length - 1
+    bridge.releaseElement(raw.token)
+    expect(occurrences).toBe(1)
+  }, 30_000)
+})
+
 describe.skipIf(runnable)('chromium end-to-end prerequisites', () => {
   it('reports why the live suite was skipped', () => {
     const missing = [

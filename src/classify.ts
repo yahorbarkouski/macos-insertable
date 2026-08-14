@@ -116,23 +116,36 @@ function labelFor(element: RawElementIdentity): string {
 
 /**
  * Whether the element looks like a canvas editor's IME decoy rather than the surface being
- * edited. Google Docs is the canonical case: its focused element carries a small value AND a
- * settable selection — everything `readable` asks for — but it is a hidden input parked in a
- * degenerate box, its "value" is IME scratch, and verifying writes against it convicts pastes
- * that visibly landed in the document.
+ * edited. Google Docs is the canonical case, MEASURED live: an AXTextArea named "Document
+ * content", 625×1 — full content width, one pixel tall — holding two zero-width spaces, with a
+ * settable value and selection and the editable markers. Everything `readable` asks for, and
+ * all of it a lie: AX writes tunnel through it into the document while read-backs show the
+ * unchanged scratch, so a "failed" write falls to paste and the text lands TWICE.
  *
- * Deliberately narrow, judged on geometry alone (no site lists): a decoy is tiny in BOTH
- * dimensions or parked entirely off every display. A single small dimension proves nothing —
- * real editors routinely report degenerate boxes (a rich-text root inside a flex row can
- * measure zero wide while standing full height), and calling those decoys would hide a
- * readable document behind the unverifiable path.
+ * The rule, still geometry-first and site-list-free: a box degenerate in EITHER dimension
+ * cannot display a caret, so it is a decoy — unless it carries substantial readable text, which
+ * is the one measured exception (a rich-text ROOT inside a flex row can measure zero wide while
+ * standing full height, its content overflowing visibly; its VALUE is the real document).
+ * Scratch content — nothing but zero-widths and whitespace — keeps no such box honest. A box
+ * dead in both dimensions is a decoy regardless.
+ *
+ * The bias is deliberate, because the failure costs are asymmetric: calling a real editor a
+ * decoy degrades it to paste delivery, which still lands; calling a decoy real double-inserts
+ * and reports the success as failure.
  */
 function isDecoyLike(element: RawFocusedElement): boolean {
   if (!element.frameOnScreen) return true
   const frame = element.frame
   if (!frame) return false
-  return frame.width <= 2 && frame.height <= 2
+  const flatBoth = frame.width <= 2 && frame.height <= 2
+  if (flatBoth) return true
+  const flatOne = frame.width <= 2 || frame.height <= 2
+  if (!flatOne) return false
+  return element.value.replace(SCRATCH_CHARACTERS, '').length === 0
 }
+
+/** Zero-widths, the object-replacement character, and whitespace: what IME scratch is made of. */
+const SCRATCH_CHARACTERS = /[​‌﻿⁠￼\s]/g
 
 /**
  * Precise edits need both halves: readable text to verify a write against, and a settable

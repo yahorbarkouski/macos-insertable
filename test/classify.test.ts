@@ -225,6 +225,31 @@ describe('classify', () => {
       expect(verdict).toMatchObject({ field: { surface: 'opaque' } })
     })
 
+    it('treats the Google Docs strip — flat in ONE dimension, scratch-only value — as opaque', () => {
+      // Measured live: AXTextArea "Document content", 625×1, two zero-width spaces, settable
+      // everything. Classifying it readable made AX writes tunnel into the document while
+      // verification read unchanged scratch: the text landed twice and reported as failure.
+      const verdict = classify(
+        element({
+          value: '\u200B\u200B',
+          numberOfCharacters: 2,
+          frame: { x: 6, y: 117, width: 625, height: 1 }
+        }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ field: { surface: 'opaque', value: '' } })
+    })
+
+    it('treats an EMPTY flat-dimension box as opaque — the acceptable degrade', () => {
+      // An empty rich-text root measuring zero wide cannot be told from a decoy; paste-only
+      // delivery still lands there, while the reverse mistake double-inserts.
+      const verdict = classify(
+        element({ value: '', frame: { x: 300, y: 200, width: 0, height: 480 } }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ field: { surface: 'opaque' } })
+    })
+
     it('does NOT call a zero-width but full-height editor a decoy', () => {
       // A rich-text root inside a flex row can measure zero wide while standing full height;
       // a single degenerate dimension proves nothing.
