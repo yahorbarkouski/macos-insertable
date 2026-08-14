@@ -24,10 +24,12 @@ export type {
   RawVerifyResult,
   RawWriteResult
 } from './bridge.js'
-export type { CaptureResult } from './capture.js'
+export type { CaptureResult, StartDraftResult, SubmitResult } from './capture.js'
 export { CapturedField, captureFocusedField, readFocusedField } from './capture.js'
 export type { ClassifyOptions, ElementVerdict } from './classify.js'
 export { buildIdentity, classify, hasTextCapability, LABEL_MAX_CHARS } from './classify.js'
+export type { DraftUpdateResult, MinimalEdit } from './draft.js'
+export { Draft, minimalEdit } from './draft.js'
 export { didTextLand, readCarriesEvidence } from './insert.js'
 export type {
   Access,

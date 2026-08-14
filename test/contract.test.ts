@@ -27,8 +27,10 @@ describe.skipIf(bridge === null)('native addon contract', () => {
       'primeAccessibility',
       'verifyElement',
       'setSelectedText',
+      'setSelectedTextRange',
       'setValue',
       'postPaste',
+      'postReturn',
       'postBackspace',
       'typeUnicode',
       'pasteboardChangeCount',
@@ -57,6 +59,14 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     const write = await need().setSelectedText('ax-does-not-exist', 'x', 100, 1000)
     expect(write.ok).toBe(false)
     expect(write.error).toBe('unknown-token')
+    const aim = await need().setSelectedTextRange('ax-does-not-exist', 0, 1, 100)
+    expect(aim.ok).toBe(false)
+    expect(aim.error).toBe('unknown-token')
+  })
+
+  it('refuses an unknown submit modifier instead of guessing a chord', () => {
+    const b = need() as unknown as { postReturn: (pid: number, modifier: string) => boolean }
+    expect(b.postReturn(21474836, 'option')).toBe(false)
   })
 
   it('resolves null for a pid that cannot exist instead of hanging', async () => {
@@ -74,6 +84,7 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     await expect(b.readFocusedElement?.()).rejects.toThrow()
     await expect(b.verifyElement?.('token-only')).rejects.toThrow()
     await expect(b.setValue?.({})).rejects.toThrow()
+    await expect(b.setSelectedTextRange?.('token-only')).rejects.toThrow()
     await expect(b.typeUnicode?.('not-a-pid')).rejects.toThrow()
     expect(need().postPaste(Number.NaN)).toBe(false)
     expect(need().pasteboardRestore('pb-does-not-exist')).toBe(false)

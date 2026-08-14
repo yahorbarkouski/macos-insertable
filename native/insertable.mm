@@ -46,7 +46,9 @@ namespace {
 // the *character* "v" to a different physical key.
 constexpr CGKeyCode kKeyCodeV = 0x09;
 constexpr CGKeyCode kKeyCodeDelete = 0x33;
+constexpr CGKeyCode kKeyCodeReturn = 0x24;
 constexpr CGKeyCode kKeyCodeCommand = 0x37;
+constexpr CGKeyCode kKeyCodeShift = 0x38;
 
 // Passed as the modifier keycode for a keystroke that takes no modifier.
 constexpr CGKeyCode kNoModifierKey = 0xFFFF;
@@ -593,6 +595,76 @@ class SetTextWorker : public PromiseWorker {
 };
 
 /**
+ * Sets the element's selection range — the aiming half of a precise range edit: select
+ * [start, start+length), then replace the selection. Reports the range read back in the same
+ * trip so TypeScript can tell a landed placement from the silent no-op refusal some views
+ * answer with.
+ */
+class SetSelectionRangeWorker : public PromiseWorker {
+ public:
+  SetSelectionRangeWorker(Napi::Env env, std::string token, long start, long length,
+                          double timeoutMs)
+      : PromiseWorker(env),
+        token_(std::move(token)),
+        start_(start),
+        length_(length),
+        timeoutMs_(timeoutMs) {}
+
+  void Execute() override {
+    AXUIElementRef element = ElementRegistry::Shared().Copy(token_);
+    if (!element) {
+      error_ = "unknown-token";
+      return;
+    }
+    ApplyTimeout(element, timeoutMs_);
+    CFRange range = CFRangeMake(start_, length_);
+    AXValueRef value = AXValueCreate(kAXValueTypeCFRange, &range);
+    if (!value) {
+      CFRelease(element);
+      error_ = "encoding-failed";
+      return;
+    }
+    AXError result =
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute, value);
+    CFRelease(value);
+    ok_ = result == kAXErrorSuccess;
+    if (!ok_) error_ = "ax-error-" + std::to_string(static_cast<int>(result));
+    CFRange after = CFRangeMake(0, 0);
+    hasAfter_ = CopyAxRange(element, kAXSelectedTextRangeAttribute, &after);
+    afterStart_ = static_cast<long>(after.location);
+    afterLength_ = static_cast<long>(after.length);
+    CFRelease(element);
+  }
+
+  void OnOK() override {
+    Napi::Env env = Env();
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("ok", Napi::Boolean::New(env, ok_));
+    result.Set("error",
+               error_.empty() ? env.Null() : Napi::String::New(env, error_).As<Napi::Value>());
+    if (hasAfter_) {
+      result.Set("selectionStart", Napi::Number::New(env, static_cast<double>(afterStart_)));
+      result.Set("selectionLength", Napi::Number::New(env, static_cast<double>(afterLength_)));
+    } else {
+      result.Set("selectionStart", env.Null());
+      result.Set("selectionLength", env.Null());
+    }
+    deferred_.Resolve(result);
+  }
+
+ private:
+  std::string token_;
+  long start_;
+  long length_;
+  double timeoutMs_;
+  bool ok_ = false;
+  bool hasAfter_ = false;
+  long afterStart_ = 0;
+  long afterLength_ = 0;
+  std::string error_;
+};
+
+/**
  * Asks an application to build the accessibility tree it otherwise builds only once it detects
  * assistive technology.
  *
@@ -815,6 +887,20 @@ Napi::Value SetValue(const Napi::CallbackInfo& info) {
   return worker->Promise();
 }
 
+Napi::Value SetSelectedTextRange(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number, ArgKind::Number, ArgKind::Number})) {
+    return RejectBadArgs(env, "setSelectedTextRange(token, start, length, timeoutMs)");
+  }
+  auto* worker = new SetSelectionRangeWorker(
+      env, info[0].As<Napi::String>().Utf8Value(),
+      static_cast<long>(info[1].As<Napi::Number>().Int64Value()),
+      static_cast<long>(info[2].As<Napi::Number>().Int64Value()),
+      info[3].As<Napi::Number>().DoubleValue());
+  worker->Queue();
+  return worker->Promise();
+}
+
 Napi::Value PrimeAccessibility(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (!ArgsMatch(info, {ArgKind::Number, ArgKind::Number})) {
@@ -899,6 +985,31 @@ Napi::Value PostPaste(const Napi::CallbackInfo& info) {
   pid_t expectedPid = static_cast<pid_t>(info[0].As<Napi::Number>().Int32Value());
   return Napi::Boolean::New(
       env, PostKeyToFrontmost(expectedPid, kKeyCodeV, kKeyCodeCommand, kCGEventFlagMaskCommand));
+}
+
+/**
+ * Posts Return, optionally with a real modifier, for callers submitting what they inserted.
+ * Chat-style applications disagree on the send chord (Enter, Shift-Enter, Cmd-Enter), so the
+ * modifier is the caller's choice; unknown modifier strings refuse rather than guess.
+ */
+Napi::Value PostReturn(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::Number, ArgKind::String})) return Napi::Boolean::New(env, false);
+  pid_t expectedPid = static_cast<pid_t>(info[0].As<Napi::Number>().Int32Value());
+  std::string modifier = info[1].As<Napi::String>().Utf8Value();
+  CGKeyCode modifierKey = kNoModifierKey;
+  CGEventFlags flags = static_cast<CGEventFlags>(0);
+  if (modifier == "shift") {
+    modifierKey = kKeyCodeShift;
+    flags = kCGEventFlagMaskShift;
+  } else if (modifier == "command") {
+    modifierKey = kKeyCodeCommand;
+    flags = kCGEventFlagMaskCommand;
+  } else if (modifier != "none") {
+    return Napi::Boolean::New(env, false);
+  }
+  return Napi::Boolean::New(env,
+                            PostKeyToFrontmost(expectedPid, kKeyCodeReturn, modifierKey, flags));
 }
 
 /** Deletes a live selection ahead of typing into editors that replace-on-keydown. */
@@ -1061,8 +1172,10 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("primeAccessibility", Napi::Function::New(env, PrimeAccessibility));
   exports.Set("verifyElement", Napi::Function::New(env, VerifyElement));
   exports.Set("setSelectedText", Napi::Function::New(env, SetSelectedText));
+  exports.Set("setSelectedTextRange", Napi::Function::New(env, SetSelectedTextRange));
   exports.Set("setValue", Napi::Function::New(env, SetValue));
   exports.Set("postPaste", Napi::Function::New(env, PostPaste));
+  exports.Set("postReturn", Napi::Function::New(env, PostReturn));
   exports.Set("postBackspace", Napi::Function::New(env, PostBackspace));
   exports.Set("typeUnicode", Napi::Function::New(env, TypeUnicode));
   exports.Set("pasteboardChangeCount", Napi::Function::New(env, PasteboardChangeCount));

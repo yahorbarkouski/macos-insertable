@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- `CapturedField.startDraft()` → `Draft`: a revisable region reconciled to new text with
+  diff-minimal, surrogate-safe range edits — one concept covering streaming partials,
+  corrections, LLM cleanups, "scratch that" (`update('')`), and dictating over a selection.
+  Measured 2–7ms per update against a live AppKit app. Updates re-prove the target and refuse
+  with `draft-drifted` when the user edited the region.
+- `CapturedField.submit(modifier?)`: posts the send chord (Enter / Shift-Enter / Cmd-Enter)
+  after re-proving the captured element, for dictate-and-send flows.
+- New native primitives: `setSelectedTextRange` (aim a precise range edit, placement read back
+  in the same trip) and `postReturn` (real modifier key events, unknown modifiers refused).
+
 ## 0.1.0
 
 Initial release.

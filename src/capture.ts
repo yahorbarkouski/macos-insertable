@@ -6,11 +6,46 @@
  */
 
 import { loadBridge } from './addon.js'
-import type { AppIdentity, NativeBridge } from './bridge.js'
+import type { AppIdentity, NativeBridge, SubmitModifier } from './bridge.js'
 import { buildIdentity, classify } from './classify.js'
+import { Draft } from './draft.js'
 import { insertInto } from './insert.js'
 import { wellFormed } from './sanitize.js'
 import type { Capture, CaptureOptions, FieldInfo, InsertOptions, InsertResult } from './types.js'
+
+export type StartDraftResult =
+  | { ok: true; draft: Draft }
+  | {
+      ok: false
+      reason:
+        | 'released'
+        /** Drafts need a readable surface: precise range edits and read-back verification. */
+        | 'opaque-surface'
+        | 'read-only'
+        | 'no-permission'
+        | 'secure-input'
+        | 'app-changed'
+        | 'element-changed'
+        | 'element-gone'
+        | 'element-disabled'
+        /** The element would not report a caret to anchor the draft at. */
+        | 'no-caret'
+    }
+
+export type SubmitResult =
+  | { submitted: true }
+  | {
+      submitted: false
+      reason:
+        | 'released'
+        | 'no-permission'
+        | 'secure-input'
+        | 'app-changed'
+        | 'element-changed'
+        | 'element-gone'
+        /** The keystroke was not posted — the target lost frontmost mid-flight. */
+        | 'submit-not-posted'
+    }
 
 /** Accessibility messaging timeout per call into the target application. */
 export const DEFAULT_TIMEOUT_MS = 250
@@ -77,6 +112,90 @@ export class CapturedField {
    * focus left the element, or the element was replaced — in which case the handle should be
    * released and a fresh capture taken.
    */
+  /**
+   * Opens a draft: a revisable region anchored at the live caret (or over the live selection,
+   * which the first update then replaces — dictating over selected text is a replacement).
+   *
+   * The draft is what streaming transcription wants: call `draft.update(partial)` as words
+   * arrive, `update(finalText)` when the transcript settles, `update(cleaned)` when an LLM
+   * pass lands seconds later, or `update('')` for "scratch that". Each update is one
+   * diff-minimal, verified range edit; a region the user edited refuses with `draft-drifted`.
+   */
+  public async startDraft(): Promise<StartDraftResult> {
+    if (this.#released) return { ok: false, reason: 'released' }
+    if (this.#field.surface === 'opaque') return { ok: false, reason: 'opaque-surface' }
+    if (this.#field.readOnly) return { ok: false, reason: 'read-only' }
+    const bridge = this.#bridge
+
+    if (!bridge.isAccessibilityTrusted()) return { ok: false, reason: 'no-permission' }
+    if (bridge.isSecureInputEnabled()) return { ok: false, reason: 'secure-input' }
+
+    const front = bridge.frontmostApp()
+    if (
+      !front ||
+      front.pid !== this.app.pid ||
+      (this.app.bundleId && front.bundleId !== this.app.bundleId)
+    ) {
+      return { ok: false, reason: 'app-changed' }
+    }
+
+    const verified = await bridge
+      .verifyElement(this.#token, this.app.pid, this.#timeoutMs)
+      .catch(() => null)
+    if (!verified) return { ok: false, reason: 'element-gone' }
+    if (!verified.sameElement || buildIdentity(verified) !== this.#field.identity) {
+      return { ok: false, reason: 'element-changed' }
+    }
+    if (!verified.enabled) return { ok: false, reason: 'element-disabled' }
+
+    // Anchored at the LIVE caret, not the captured one — the user may have moved it since.
+    const state = await bridge
+      .readElementState(this.#token, this.#timeoutMs, DEFAULT_VALUE_MAX_CHARS)
+      .catch(() => null)
+    if (!state?.hasValue || state.selectionStart === null || state.selectionLength === null) {
+      return { ok: false, reason: 'no-caret' }
+    }
+    const anchor = state.selectionStart
+    const initial = state.value.slice(anchor, anchor + state.selectionLength)
+    return {
+      ok: true,
+      draft: new Draft(bridge, this.#token, this.app, this.#field.identity, anchor, initial)
+    }
+  }
+
+  /**
+   * Posts the send chord — Return, with the modifier the target application's send convention
+   * needs — after re-proving the captured element still holds focus. For "dictate and send".
+   */
+  public async submit(modifier: SubmitModifier = 'none'): Promise<SubmitResult> {
+    if (this.#released) return { submitted: false, reason: 'released' }
+    const bridge = this.#bridge
+
+    if (!bridge.isAccessibilityTrusted()) return { submitted: false, reason: 'no-permission' }
+    if (bridge.isSecureInputEnabled()) return { submitted: false, reason: 'secure-input' }
+
+    const front = bridge.frontmostApp()
+    if (
+      !front ||
+      front.pid !== this.app.pid ||
+      (this.app.bundleId && front.bundleId !== this.app.bundleId)
+    ) {
+      return { submitted: false, reason: 'app-changed' }
+    }
+
+    const verified = await bridge
+      .verifyElement(this.#token, this.app.pid, this.#timeoutMs)
+      .catch(() => null)
+    if (!verified) return { submitted: false, reason: 'element-gone' }
+    if (!verified.sameElement || buildIdentity(verified) !== this.#field.identity) {
+      return { submitted: false, reason: 'element-changed' }
+    }
+
+    return bridge.postReturn(this.app.pid, modifier)
+      ? { submitted: true }
+      : { submitted: false, reason: 'submit-not-posted' }
+  }
+
   public async reread(): Promise<FieldInfo | null> {
     if (this.#released) return null
     const bridge = this.#bridge

@@ -214,6 +214,59 @@ edit, it's destruction.
 `'auto'` (default) climbs the ladder below. Force `'clipboard'` or `'keystrokes'` only when you
 know the target better than the classifier does.
 
+## `startDraft()` — streaming, corrections, "scratch that"
+
+Every revision flow transcription and AI apps need is the same operation: *own a region of the
+field and keep reconciling it to new text*. A `Draft` is that region.
+
+```ts
+using captured = await captureFocusedField()
+if (captured.status !== 'field') return
+const started = await captured.startDraft()
+if (!started.ok) return  // e.g. 'opaque-surface' — canvas editors can't range-edit
+const draft = started.draft
+
+// Words appear WHILE the user is speaking — each partial is one edit:
+await draft.update('their')                    //  "their"
+await draft.update('their going home')         //  "their going home"
+
+// The corrected transcript lands — ONE WORD is revised in place, the rest never repaints:
+await draft.update("they're going home")       //  "they're going home"
+
+// An LLM cleanup arriving two seconds later? Same call. User said "scratch that"?
+await draft.update('')                         //  region empties, stays owned
+```
+
+Three properties make this the fast path:
+
+- **Diff-minimal edits.** Each `update` computes the smallest changed span (surrogate-safe) and
+  replaces only that: select `[start, end)` → write the replacement. Revising one word of a
+  paragraph is one tiny write. Measured against a live AppKit app: **2–7ms per update** —
+  streaming partials cost effectively nothing.
+- **Verified, like everything else.** Every update first re-proves the world (same app, same
+  element) and then checks the region still holds *exactly what the draft last wrote*. If the
+  user edited it, `update` refuses with `'draft-drifted'` — their keystrokes outrank your
+  transcript.
+- **Selection-aware start.** A draft started while text is selected owns that selection, so the
+  first update replaces it — dictating over selected text does what typing over it does.
+
+Drafts need a `readable` surface. On `opaque` ones (`'opaque-surface'` refusal), fall back to a
+one-shot `insert` of the final text — honestly, since revisions there can't be verified.
+
+## `submit()` — dictate and send
+
+Both major OSS dictation apps grew an "auto-send" feature, so it's a first-class call rather
+than everyone's hand-rolled Enter:
+
+```ts
+await captured.insert(transcript)
+await captured.submit()             // Enter
+await captured.submit('command')    // ⌘-Enter — chat apps disagree on the send chord
+```
+
+Same guarantees as insertion: the element is re-proven first, so Enter cannot be pressed in a
+different application than the one captured (`'app-changed'` refusal instead).
+
 ## Every refusal, grouped
 
 ```
@@ -222,6 +275,8 @@ app-changed · element-changed · element-gone                   the world moved
 read-only · element-disabled                                   the field says no
 selection-in-the-way · no-selection · unreadable-replace-all   mode doesn't fit reality
 paste-not-posted · paste-did-not-land · type-failed            delivery genuinely failed
+draft-drifted · range-write-failed · no-caret ·                draft-specific: the user edited the
+opaque-surface · submit-not-posted                             region, or the surface can't range-edit
 ```
 
 Each maps to a distinct user-facing message. That's the design bet of the whole API: `false`
@@ -275,9 +330,9 @@ Three tiers, honest about what each proves:
 
 | Tier | Where it runs | What it proves |
 | --- | --- | --- |
-| `npm test` — 83 unit tests | anywhere (Linux CI included) | every decision: classification, preflight, the ladder, borrowing — against a scripted fake bridge |
-| `npm run test:contract` — 8 tests | macOS | the compiled addon: loads, full surface, typed failures, never crashes on bad input, snapshots survive run-loop turns |
-| `npm run test:e2e` — 8 tests | macOS + Accessibility grant + idle desktop | the real thing: a live AppKit app is spawned, focused, captured, written into, and read back — all three rungs, secure-field refusal, wrong-app refusal, clipboard restoration |
+| `npm test` — 121 unit tests | anywhere (Linux CI included) | every decision: classification, preflight, the ladder, drafts and their diffs, borrowing — against a scripted fake bridge |
+| `npm run test:contract` — 9 tests | macOS | the compiled addon: loads, full surface, typed failures, never crashes on bad input, snapshots survive run-loop turns |
+| `npm run test:e2e` — 11 tests | macOS + Accessibility grant + idle desktop | the real thing: a live AppKit app is spawned, focused, captured, written into, and read back — all three rungs, draft streaming with measured latency, drift refusal, secure-field refusal, wrong-app refusal, clipboard restoration, submit |
 
 The E2E suite compiles its own AppKit host (`test/e2e/TestHost.swift`) and briefly takes real
 keyboard focus; run it when you're not typing.

@@ -277,6 +277,82 @@ describe.skipIf(!runnable).sequential('end-to-end against a live AppKit host', (
     expect(bridge.pasteboardChangeCount()).toBe(countBefore)
   }, 30_000)
 
+  it('streams a draft: partials appear, a correction revises one word in place', async () => {
+    const pid = await startHost('textview')
+    using captured = await captureHostField(pid)
+
+    let started = await captured.startDraft()
+    for (
+      let attempt = 0;
+      attempt < 20 && !started.ok && started.reason === 'app-changed';
+      attempt += 1
+    ) {
+      execFileSync('open', [hostBundle])
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      started = await captured.startDraft()
+    }
+    if (!started.ok) throw new Error(`draft refused: ${started.reason}`)
+    const draft = started.draft
+
+    // The streaming shape: partial hypotheses land as the user "speaks", each a minimal edit.
+    const partials = ['their', 'their going', 'their going home']
+    const timings: number[] = []
+    for (const partial of partials) {
+      const startedAt = performance.now()
+      expect(await draft.update(partial)).toEqual({ delivered: true })
+      timings.push(Math.round(performance.now() - startedAt))
+    }
+    expect((await captured.reread())?.value).toBe('their going home')
+
+    // The corrected transcript arrives: one word revised in place, tail untouched.
+    expect(await draft.update("they're going home")).toEqual({ delivered: true })
+    expect((await captured.reread())?.value).toBe("they're going home")
+
+    // "Scratch that" — reconcile to empty, then the real sentence into the same anchor.
+    expect(await draft.update('')).toEqual({ delivered: true })
+    expect((await captured.reread())?.value).toBe('')
+    expect(await draft.update('On my way.')).toEqual({ delivered: true })
+    expect((await captured.reread())?.value).toBe('On my way.')
+
+    console.log(`draft update latency per partial (ms): ${timings.join(', ')}`)
+  }, 30_000)
+
+  it('refuses a drifted draft instead of overwriting what the user typed', async () => {
+    const pid = await startHost('textview')
+    using captured = await captureHostField(pid)
+    const started = await captured.startDraft()
+    if (!started.ok) throw new Error(`draft refused: ${started.reason}`)
+    expect(await started.draft.update('dictated text')).toEqual({ delivered: true })
+
+    // The "user" rewrites the field through a channel the draft does not control. Typing
+    // AFTER the region would not drift it — the region's coordinates survive — so the test
+    // rewrites the region itself.
+    await captured.insert('the user rewrote all of this', { mode: 'all' })
+
+    expect(await started.draft.update('dictated text more')).toEqual({
+      delivered: false,
+      reason: 'draft-drifted'
+    })
+  }, 30_000)
+
+  it('submits with Return after inserting', async () => {
+    const pid = await startHost('textview')
+    using captured = await captureHostField(pid)
+    await insertOnceFrontmost(captured, 'line one')
+
+    const submitted = await captured.submit()
+    expect(submitted).toEqual({ submitted: true })
+
+    // In a text view Return is a newline — proof the chord reached the field.
+    let value = ''
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      value = (await captured.reread())?.value ?? value
+      if (value.includes('\n')) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(value).toBe('line one\n')
+  }, 30_000)
+
   it('refuses to insert after the host loses frontmost', async () => {
     const pid = await startHost('textview')
     using captured = await captureHostField(pid)

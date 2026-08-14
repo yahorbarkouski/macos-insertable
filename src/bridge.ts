@@ -58,6 +58,17 @@ export interface RawWriteResult {
   after: RawTextState | null
 }
 
+export interface RawSelectionResult {
+  ok: boolean
+  error: string | null
+  /** The selection read back in the same trip; null when the element would not report one. */
+  selectionStart: number | null
+  selectionLength: number | null
+}
+
+/** Chat-style applications disagree on the send chord; the modifier is the caller's choice. */
+export type SubmitModifier = 'none' | 'shift' | 'command'
+
 export interface RawPasteboardSnapshot {
   token: string
   changeCount: number
@@ -90,6 +101,13 @@ export interface NativeBridge {
     timeoutMs: number,
     valueMaxChars: number
   ): Promise<RawWriteResult>
+  /** Aims a precise range edit: select [start, start+length), then replace the selection. */
+  setSelectedTextRange(
+    token: string,
+    start: number,
+    length: number,
+    timeoutMs: number
+  ): Promise<RawSelectionResult>
   setValue(
     token: string,
     text: string,
@@ -97,6 +115,7 @@ export interface NativeBridge {
     valueMaxChars: number
   ): Promise<RawWriteResult>
   postPaste(expectedPid: number): boolean
+  postReturn(expectedPid: number, modifier: SubmitModifier): boolean
   postBackspace(expectedPid: number): boolean
   typeUnicode(expectedPid: number, text: string): Promise<boolean>
   pasteboardChangeCount(): number

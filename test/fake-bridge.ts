@@ -66,6 +66,13 @@ export function fakeBridge(overrides: Partial<NativeBridge> = {}): NativeBridge 
       sameElement: true,
       enabled: true
     })),
+    setSelectedTextRange: vi.fn(async (_token: string, start: number, length: number) => ({
+      ok: true,
+      error: null,
+      selectionStart: start,
+      selectionLength: length
+    })),
+    postReturn: vi.fn(() => true),
     setSelectedText: vi.fn(async () => ({
       ok: true,
       error: null,
