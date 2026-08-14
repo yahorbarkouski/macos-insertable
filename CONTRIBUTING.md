@@ -46,6 +46,32 @@ release gate you run locally.
   `NSWorkspace.frontmostApplication` or the AX system-wide focused application — both freeze
   silently in processes without a serviced run loop.
 
+## Deferred by design
+
+Things that look like obvious additions and are not, so nobody re-derives the reasoning:
+
+- **Receipt-sequenced clipboard restore.** Publishing the text as a pasteboard promise
+  (`declareTypes:owner:`) and restoring only once `provideDataForType:` proves the target read it
+  is a better answer than any fixed delay. It needs a serviced main run loop — which this library
+  deliberately does not require — and an unserviced promise means the target pastes *nothing*.
+  Revisit together with the item below; they share the infrastructure.
+- **`AXObserver` push notifications** for focus/value/selection changes. Same blocker: callbacks
+  need a serviced CFRunLoop, so doing it properly means a dedicated `CFRunLoopRun` thread in the
+  addon and a change to the threading contract. Polling (`reread`, and the draft's own
+  precondition read) covers current needs.
+- **Text-marker caret placement for Chromium.** The `AXSelectedTextMarkerRange` setter is the only
+  path that places a caret in Chromium contenteditables, but its reachability is version-pinned
+  and needs per-app validation. Drafts already work there via the value-splice tactic, which
+  removed the urgency.
+- **Blind delivery into applications with no accessibility tree.** Slack, Discord and VS Code
+  often report no focused element; every comparable tool pastes anyway, this library refuses.
+  A typed opt-in escape hatch is the right shape, but it is a product decision about what a
+  library should let callers do unverified — it deserves its own release and explicit docs.
+  Refusal stays the default in every design considered.
+- **Smart joining-space, rich-content paste, revert-last-insert, per-app profiles.** Useful, none
+  load-bearing for correctness. Spacing in particular is *policy* that differs per product; the
+  library exposes the primitives (value + caret offset) and the recipe belongs in docs.
+
 ## Releasing
 
 1. `pnpm typecheck && pnpm lint && pnpm test && pnpm test:contract && pnpm test:e2e`

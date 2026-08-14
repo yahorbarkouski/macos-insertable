@@ -2,8 +2,6 @@
 
 ## 0.4.0
 
-Adoptions from the ecosystem audit (`docs/field-audit-2026-08.md`).
-
 - **Paste chord is layout-resolved.** Physical keycode 9 is "V" only on QWERTY-shaped layouts;
   on plain Dvorak or Colemak the same key under Command was a different, possibly destructive
   command. The keycode is now resolved through the active layout, with the "— QWERTY ⌘" family

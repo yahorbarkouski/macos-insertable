@@ -334,7 +334,14 @@ export async function captureFocusedField(options: CaptureOptions = {}): Promise
     return { ...verdict, app }
   }
 
-  return new CapturedField(bridge, element.token, app, verdict.field, timeoutMs, element.placeholder)
+  return new CapturedField(
+    bridge,
+    element.token,
+    app,
+    verdict.field,
+    timeoutMs,
+    element.placeholder
+  )
 }
 
 /**

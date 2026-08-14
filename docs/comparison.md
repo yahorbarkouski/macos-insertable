@@ -1,13 +1,12 @@
 # How this compares
 
-Ten open-source projects that insert text into other macOS applications were read in full
-(source, not documentation) in August 2026: **Espanso**, **Handy**, **VoiceInk**,
-**Whispering/Epicenter**, **Vibe**, **OpenWhispr**, **Lirevo**, **Amical**, **Yap**, and
-**fnkey**. Method and citations: [`field-audit-2026-08.md`](./field-audit-2026-08.md).
+Ten open-source projects insert text into other macOS applications: **Espanso**, **Handy**,
+**VoiceInk**, **Whispering/Epicenter**, **Vibe**, **OpenWhispr**, **Lirevo**, **Amical**,
+**Yap**, and **fnkey**. Their insertion paths were read in source — not from their docs — and
+this is what they do, what breaks as a result, and where this library is and is not better.
 
-This document states what they do, what breaks as a result, and where this library is and is
-not better. It is not a marketing page: Part 4 lists the things they do that we don't, and the
-places where a competitor's position is defensible.
+It is not a marketing page: Part 4 lists what they do that we don't, and where a competitor's
+position is defensible.
 
 ---
 
