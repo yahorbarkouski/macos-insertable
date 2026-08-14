@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildIdentity, classify, hasTextCapability, LABEL_MAX_CHARS } from '../src/classify.js'
+import {
+  buildIdentity,
+  classify,
+  hasTextCapability,
+  isPlaceholderPhantom,
+  LABEL_MAX_CHARS
+} from '../src/classify.js'
 import { element } from './fake-bridge.js'
 
 const OPTIONS = { maxValueChars: 4000 }
@@ -163,6 +169,17 @@ describe('classify', () => {
     it('is opaque without a settable selection', () => {
       const verdict = classify(element({ selectedTextSettable: false }), OPTIONS)
       expect(verdict).toMatchObject({ field: { surface: 'opaque' } })
+    })
+
+    it('recognizes phantoms through trailing artifacts, but never real text', () => {
+      expect(isPlaceholderPhantom('Ask anything…', 'Ask anything…')).toBe(true)
+      // Composers keep a trailing newline or zero-width after the rendered placeholder.
+      expect(isPlaceholderPhantom('Ask anything…\n', 'Ask anything…')).toBe(true)
+      expect(isPlaceholderPhantom('Ask anything…\u200B', 'Ask anything…')).toBe(true)
+      // The user genuinely typed the placeholder AND MORE — that is content.
+      expect(isPlaceholderPhantom('Ask anything… ok', 'Ask anything…')).toBe(false)
+      expect(isPlaceholderPhantom('unrelated', 'Ask anything…')).toBe(false)
+      expect(isPlaceholderPhantom('anything', '')).toBe(false)
     })
 
     it('blanks a value that is exactly the declared placeholder — decoration, not content', () => {

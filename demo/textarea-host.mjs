@@ -22,6 +22,14 @@ const pages = {
   staticfocus:
     '<div id="t" tabindex="0" style="width:480px;height:240px;font:14px monospace">just some readable text, focusable but not editable</div>' +
     '<script>document.getElementById("t").focus()</script>',
+  // The variant that escaped the exact-equality guard: the contenteditable keeps a trailing
+  // <br>, so the accessibility value reads "Ask anything…\n" — placeholder plus artifact —
+  // and the caret parks INSIDE the phantom.
+  placeholder2:
+    '<div id="t" contenteditable="true" aria-placeholder="Ask anything…" ' +
+    'style="width:480px;height:240px;font:14px monospace;border:1px solid gray">Ask anything…<br></div>' +
+    '<script>const t=document.getElementById("t");t.focus();' +
+    'const sel=getSelection();sel.collapse(t.firstChild,5)</script>',
   placeholder:
     '<div id="t" contenteditable="true" aria-placeholder="Ask anything…" ' +
     'style="width:480px;height:240px;font:14px monospace;border:1px solid gray">Ask anything…</div>' +

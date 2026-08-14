@@ -1,7 +1,7 @@
 {
   "name": "macos-insertable",
   "version": "0.4.0",
-  "description": "Find the focused text field of any macOS application, learn whether text can be inserted there, and insert it — verified, safely, through the Accessibility API with clipboard and keystroke fallbacks.",
+  "description": "Find the focused text field of any macOS application, learn whether text can be inserted there, and insert it \u2014 verified, safely, through the Accessibility API with clipboard and keystroke fallbacks.",
   "keywords": [
     "macos",
     "accessibility",
@@ -50,7 +50,7 @@
     "lint:fix": "biome check --write .",
     "test": "vitest run test/classify.test.ts test/capture.test.ts test/insert.test.ts",
     "test:contract": "vitest run test/contract.test.ts",
-    "test:e2e": "vitest run test/e2e/insert.e2e.test.ts",
+    "test:e2e": "vitest run test/e2e/insert.e2e.test.ts test/e2e/chromium.e2e.test.ts",
     "test:all": "vitest run"
   },
   "dependencies": {
