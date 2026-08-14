@@ -29,7 +29,7 @@
     }
   },
   "bin": {
-    "macos-insertable": "./dist/cli.js"
+    "macos-insertable": "dist/cli.js"
   },
   "files": [
     "dist",

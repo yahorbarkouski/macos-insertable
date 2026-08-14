@@ -1,18 +1,28 @@
 name: Release
 
-# Publishing runs from a tag so the published artifact always corresponds to a commit anyone can
-# check out. It runs on macOS because the prebuilt binaries have to be compiled here, and with
-# id-token permission so npm records build provenance: the published tarball is then traceable to
-# this workflow run and this commit.
+# Publishing runs from a tag, so a published version always corresponds to a commit anyone can
+# check out. It runs on macOS because the prebuilt binaries are compiled here, and with
+# id-token permission so npm records build provenance against this workflow run.
 #
-# One-time setup: add an npm automation token as the NPM_TOKEN repository secret.
-# To release: bump the version, update CHANGELOG.md, then
-#   git tag v0.5.0 && git push --tags
+# One-time setup: add an npm automation token as the NPM_TOKEN repository secret. An automation
+# token is the right kind: it is exempt from the two-factor prompt that blocks publishing from
+# a non-interactive machine.
+#
+# To release:  bump the version, add its CHANGELOG entry, then
+#   git tag v0.6.0 && git push --tags
+#
+# To rehearse: run this workflow manually with "dry run" left on. Everything happens except the
+# upload, and no token is needed, so the pipeline can be proven before it is trusted with one.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and validate without publishing'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -30,28 +40,52 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          # Writes the .npmrc that reads NODE_AUTH_TOKEN at publish time.
           registry-url: https://registry.npmjs.org
 
       - run: pnpm install
 
       - name: Check the tag matches the version being published
+        if: github.event_name == 'push'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           version="$(node -p "require('./package.json').version")"
           if [ "$tag" != "$version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match package version $version" >&2
+            echo "::error::tag $GITHUB_REF_NAME does not match package version $version"
             exit 1
           fi
+
+      # npm refuses to replace a published version, and its error for that is obscure. Say it
+      # plainly here instead, before spending the rest of the job.
+      - name: Check this version is not already published
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "macos-insertable@$version" version >/dev/null 2>&1; then
+            echo "::error::macos-insertable@$version is already published; bump the version"
+            exit 1
+          fi
+          echo "macos-insertable@$version is not on the registry yet"
 
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm test:contract
 
-      # Both architectures, N-API so each covers every Node and Electron version.
+      # Both architectures. N-API keeps each ABI-stable across every Node and Electron version.
       - run: pnpm prebuild
 
-      # prepublishOnly builds and runs the publish guard; --provenance needs npm 11+.
-      - run: npm publish --access public --provenance
+      # Everything a publish does except the upload, so the pipeline can be rehearsed without a
+      # token. prepublishOnly does not run for `npm pack`, so the guard is invoked directly.
+      - name: Rehearse the publish
+        if: inputs.dry_run
+        run: |
+          pnpm build
+          node scripts/prepublish-check.cjs
+          npm pack --dry-run
+          echo "::notice::Dry run only. Nothing was published."
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

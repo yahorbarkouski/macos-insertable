@@ -130,6 +130,13 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     expect(need().pasteboardRestore('pb-does-not-exist')).toBe(false)
   })
 
+  it('rejects malformed numeric ranges before queuing native work', async () => {
+    const b = need() as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+    await expect(
+      b.casRangeEdit?.('ax-does-not-exist', 0, 'x', 1, 0, 'y', -1, -1, 0, 100)
+    ).rejects.toThrow(TypeError)
+  })
+
   it('holds a pasteboard snapshot across the gap it protects', async () => {
     // The snapshot must survive several run-loop turns between store and restore — held without
     // ARC it was a raw pointer into a drained autorelease pool, and the restore crashed the
