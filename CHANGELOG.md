@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0
+
+Adoptions from the ecosystem audit (`docs/field-audit-2026-08.md`).
+
+- **Paste chord is layout-resolved.** Physical keycode 9 is "V" only on QWERTY-shaped layouts;
+  on plain Dvorak or Colemak the same key under Command was a different, possibly destructive
+  command. The keycode is now resolved through the active layout, with the "— QWERTY ⌘" family
+  (which remaps while Command is held) deliberately keeping the physical code.
+- **`AXReplaceRangeWithText` is the preferred write.** One call instead of select-then-replace,
+  routed on AppKit through the element's input context — the path IMEs and Dictation use, so
+  edits coalesce into native undo and fire delegate notifications — and on WebKit a real editing
+  command that works where the two-step silently no-ops. Chromium advertises it without
+  implementing it, so failure is ordinary and falls through. Verified by read-back either way: a
+  wrong parameter key deletes the range while reporting success.
+- **The user's own modifiers are waited out** before any synthetic event (`waitForModifiersMs`,
+  default 300ms, new `modifiers-held` refusal). Hotkey callers deliver the instant a chord is
+  released; a ⌘V under a still-held ⌘⇧ is a different shortcut.
+- **`checkAccess().secureInputHolder`** names the app holding the secure-input grab, so the
+  refusal can say "quit the prompt in 1Password" instead of "somewhere". Read from the
+  IOConsoleUsers property on the IORegistry root; best effort by macOS's own design.
+- **`captured.caretBounds()`** — the caret's screen rectangle, for anchoring a HUD, ghost text,
+  or a correction popover to the insertion point.
+- **`captured.traits.terminal`** — bundle-identifier evidence that the target is a shell, which
+  executes delivered text on its newlines. Callers should gate multiline text and `submit()`.
+- **`submit()` prefers the element's confirm action** over a synthetic Return where one exists:
+  no posted event for modifier state or a focus change to distort.
+- Accessibility trust is re-read per call (`AXIsProcessTrustedWithOptions`); the plain variant
+  caches its first answer for the process lifetime, so a revoked grant read as trusted forever.
+- Comment corrections from engine-source validation: the caret-vocabulary flood is AppKit's
+  bridge, not Chromium's; the editable markers come from Chromium's platform-node layer (M120+);
+  WebKit is the mirror image, where markers are ubiquitous and the caret clause discriminates.
+
 ## 0.3.4
 
 - Placeholders no longer materialize. Rich composers render their placeholder as literal text

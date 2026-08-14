@@ -83,6 +83,13 @@ export type InsertStrategy = 'auto' | 'clipboard' | 'keystrokes'
 export interface InsertOptions {
   mode?: InsertMode
   strategy?: InsertStrategy
+  /**
+   * Wait up to this long for the user to release modifier keys before posting synthetic input.
+   * A chord still physically held while a paste goes out can turn ⌘V into ⌘⇧V or worse — the
+   * classic hold-to-talk hazard, where delivery fires the instant the hotkey is released.
+   * Ignored by the Accessibility rung, which posts no events. Default 300ms; 0 disables.
+   */
+  waitForModifiersMs?: number
 }
 
 /** The rung that actually delivered. */
@@ -117,6 +124,9 @@ export type InsertRefusal =
   | 'type-failed'
   /** The capture handle was already released. */
   | 'released'
+  /** The user was still holding modifier keys when the wait expired; posting a chord under
+   *  them would have produced a different shortcut. */
+  | 'modifiers-held'
 
 export type InsertResult =
   | { delivered: true; via: DeliveredVia }
@@ -130,4 +140,21 @@ export interface Access {
   trusted: boolean
   /** True while any application holds a password field open; synthetic input is suppressed. */
   secureInput: boolean
+  /**
+   * Which application holds the secure-input grab, when `secureInput` is true and macOS will
+   * say — so the message can be "quit the password prompt in 1Password" instead of "a password
+   * field is open somewhere". Best effort: the pid can be absent or wrong for a grab taken
+   * while the holder was in the background.
+   */
+  secureInputHolder: { pid: number; name: string; bundleId: string } | null
+}
+
+/**
+ * Delivering into a terminal is not like delivering into a text box: the shell executes on
+ * newlines, so multi-line text runs commands the user never typed, and a submit chord runs
+ * whatever sits on the line. Callers that dictate into terminals should gate on this.
+ */
+export interface TargetTraits {
+  /** The target application looks like a terminal emulator, by bundle identifier. */
+  terminal: boolean
 }

@@ -6,12 +6,25 @@
  */
 
 import { loadBridge } from './addon.js'
-import type { AppIdentity, NativeBridge, SubmitModifier } from './bridge.js'
+import type { AppIdentity, NativeBridge, ScreenRect, SubmitModifier } from './bridge.js'
 import { buildIdentity, classify } from './classify.js'
 import { Draft } from './draft.js'
 import { insertInto } from './insert.js'
+import { waitForModifiersReleased } from './modifiers.js'
 import { wellFormed } from './sanitize.js'
-import type { Capture, CaptureOptions, FieldInfo, InsertOptions, InsertResult } from './types.js'
+import { traitsFor } from './traits.js'
+import type {
+  Capture,
+  CaptureOptions,
+  FieldInfo,
+  InsertOptions,
+  InsertResult,
+  TargetTraits
+} from './types.js'
+
+/** Matches the delivery path's wait: a submit chord posted under the user's own held modifiers
+ *  is a different shortcut. */
+const SUBMIT_MODIFIER_WAIT_MS = 300
 
 export type StartDraftResult =
   | { ok: true; draft: Draft }
@@ -45,6 +58,8 @@ export type SubmitResult =
         | 'element-gone'
         /** The keystroke was not posted — the target lost frontmost mid-flight. */
         | 'submit-not-posted'
+        /** The user was still holding modifiers when the wait expired. */
+        | 'modifiers-held'
     }
 
 /** Accessibility messaging timeout per call into the target application. */
@@ -92,8 +107,28 @@ export class CapturedField {
     return this.#field
   }
 
+  /**
+   * What the target application is, beyond what the element says. Currently just `terminal`,
+   * which callers should gate multi-line text and {@link submit} on: a shell executes on
+   * newlines, so a dictated paragraph becomes a sequence of commands.
+   */
+  public get traits(): TargetTraits {
+    return traitsFor(this.app)
+  }
+
   public get released(): boolean {
     return this.#released
+  }
+
+  /**
+   * The caret's rectangle in screen coordinates — zero width, line height — for anchoring UI to
+   * the insertion point. Null when the element will not report bounds. Read-only and cheap; it
+   * neither re-proves the target nor changes anything, so a stale answer is possible if focus
+   * moved (call it right before showing UI).
+   */
+  public async caretBounds(): Promise<ScreenRect | null> {
+    if (this.#released) return null
+    return this.#bridge.caretBounds(this.#token, this.#timeoutMs).catch(() => null)
   }
 
   /**
@@ -187,6 +222,19 @@ export class CapturedField {
     if (!verified.sameElement || buildIdentity(verified) !== this.#field.identity) {
       return { submitted: false, reason: 'element-changed' }
     }
+
+    // The element's own confirm action first, where it has one: it commits the field through
+    // the application's accessibility handler rather than through a synthetic keystroke, so no
+    // modifier state can distort it and nothing is posted that a focus change could misroute.
+    // Only for the unmodified chord — a confirm action carries no notion of Shift or Command.
+    if (modifier === 'none') {
+      const confirmed = await bridge.confirmElement(this.#token, this.#timeoutMs).catch(() => null)
+      if (confirmed?.ok) return { submitted: true }
+    }
+
+    // The chord posts synthetic events, so the user's own modifiers must be clear first.
+    const released = await waitForModifiersReleased(bridge, { timeoutMs: SUBMIT_MODIFIER_WAIT_MS })
+    if (!released) return { submitted: false, reason: 'modifiers-held' }
 
     return bridge.postReturn(this.app.pid, modifier)
       ? { submitted: true }

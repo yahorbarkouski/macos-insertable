@@ -16,7 +16,12 @@
 
 import type { AppIdentity, NativeBridge, RawTextState } from './bridge.js'
 import { buildIdentity } from './classify.js'
+import { waitForModifiersReleased } from './modifiers.js'
 import type { FieldInfo, InsertOptions, InsertResult } from './types.js'
+
+/** How long to let the user's own hotkey chord clear before posting synthetic input. Long
+ *  enough for a hold-to-talk release, short enough to stay imperceptible. */
+const DEFAULT_MODIFIER_WAIT_MS = 300
 
 /** Accessibility messaging timeout for a write plus its read-back. */
 const WRITE_TIMEOUT_MS = 400
@@ -119,13 +124,21 @@ export async function insertInto(
   if (!verified.enabled) return { delivered: false, reason: 'element-disabled' }
 
   if (strategy === 'auto' && field.surface === 'readable') {
-    const written = await accessibilityWrite(bridge, token, text, mode)
+    const written = await accessibilityWrite(bridge, token, field, text, mode)
     if (written) return { delivered: true, via: 'accessibility' }
     if (mode === 'all') {
       // The whole-field write did not take; an inexact fallback could destroy the document.
       return { delivered: false, reason: 'unreadable-replace-all' }
     }
   }
+
+  // Everything below posts synthetic events, so the user's own chord has to be out of the way
+  // first — a paste under a still-held ⌘⇧ is a different shortcut. The Accessibility rung above
+  // skips this by construction: it posts nothing.
+  const released = await waitForModifiersReleased(bridge, {
+    timeoutMs: options.waitForModifiersMs ?? DEFAULT_MODIFIER_WAIT_MS
+  })
+  if (!released) return { delivered: false, reason: 'modifiers-held' }
 
   if (strategy === 'keystrokes') {
     return typedDelivery(bridge, app, field, text, mode)
@@ -134,19 +147,37 @@ export async function insertInto(
 }
 
 /**
- * Rung 1: set the text attribute and prove the write landed by reading the element back — first
- * in the same native trip, then on a short settle loop for applications that mirror their text
- * asynchronously.
+ * Rung 1: write the text through Accessibility and prove it landed by reading the element back —
+ * first in the same native trip, then on a short settle loop for applications that mirror their
+ * text asynchronously.
+ *
+ * Two write tactics, better one first. `AXReplaceRangeWithText` is a single call that on AppKit
+ * routes through the element's input context — the same path IMEs and Dictation use, so the edit
+ * coalesces into native undo and fires the delegate notifications a raw value write skips — and
+ * on WebKit is a real editing command that works even when the two-step silently no-ops.
+ * Chromium advertises the attribute without implementing it, so a failure here is ordinary and
+ * falls through to setting the attributes directly. Both tactics are verified identically; the
+ * replace call returns a bare boolean and cannot be trusted on its own word.
  */
 async function accessibilityWrite(
   bridge: NativeBridge,
   token: string,
+  field: FieldInfo,
   text: string,
   mode: 'caret' | 'selection' | 'all'
 ): Promise<boolean> {
   const before = await bridge
     .readElementState(token, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS)
     .catch(() => null)
+
+  const range = replacementRange(before, field, mode)
+  if (range) {
+    const replaced = await bridge
+      .replaceRange(token, range.start, range.length, text, WRITE_TIMEOUT_MS)
+      .catch(() => null)
+    if (replaced?.ok && (await landed(bridge, token, before, text, mode))) return true
+  }
+
   const write =
     mode === 'all'
       ? await bridge.setValue(token, text, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS).catch(() => null)
@@ -154,9 +185,38 @@ async function accessibilityWrite(
           .setSelectedText(token, text, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS)
           .catch(() => null)
   if (!write?.ok) return false
-
   if (didTextLand(before, write.after, text, mode)) return true
+  return landed(bridge, token, before, text, mode)
+}
 
+/** The range `AXReplaceRangeWithText` should target, or null when the mode's target cannot be
+ *  named in offsets (no readable state to derive it from). */
+function replacementRange(
+  before: RawTextState | null,
+  field: FieldInfo,
+  mode: 'caret' | 'selection' | 'all'
+): { start: number; length: number } | null {
+  if (!before?.hasValue) return null
+  if (mode === 'all') return { start: 0, length: before.value.length }
+  if (before.selectionStart === null || before.selectionLength === null) return null
+  if (mode === 'selection') {
+    return before.selectionLength > 0
+      ? { start: before.selectionStart, length: before.selectionLength }
+      : null
+  }
+  // caret: a zero-length range at the insertion point is an insert.
+  void field
+  return { start: before.selectionStart, length: 0 }
+}
+
+/** Re-reads on the settle schedule, for applications that mirror their text asynchronously. */
+async function landed(
+  bridge: NativeBridge,
+  token: string,
+  before: RawTextState | null,
+  text: string,
+  mode: 'caret' | 'selection' | 'all'
+): Promise<boolean> {
   for (let attempt = 0; attempt < AX_VERIFY_ATTEMPTS; attempt += 1) {
     await wait(AX_VERIFY_SETTLE_MS)
     const after = await bridge

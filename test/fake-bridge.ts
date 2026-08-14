@@ -54,6 +54,14 @@ export function fakeBridge(overrides: Partial<NativeBridge> = {}): NativeBridge 
   return {
     isAccessibilityTrusted: vi.fn(() => true),
     isSecureInputEnabled: vi.fn(() => false),
+    secureInputCulprit: vi.fn(() => null),
+    // No modifiers held, so delivery proceeds without waiting on the user's chord.
+    currentModifierFlags: vi.fn(() => 0),
+    caretBounds: vi.fn(async () => ({ x: 100, y: 200, width: 0, height: 16 })),
+    // Chromium's answer — advertised but not implemented — so the ladder's fallthrough to the
+    // two-step write is the default path under test.
+    replaceRange: vi.fn(async () => ({ ok: false, error: 'unsupported' })),
+    confirmElement: vi.fn(async () => ({ ok: false, advertised: false })),
     frontmostApp: vi.fn(() => APP),
     readFocusedElement: vi.fn(async () => element()),
     readElementState: vi.fn(async () => textState()),

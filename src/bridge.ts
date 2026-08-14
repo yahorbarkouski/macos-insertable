@@ -87,6 +87,34 @@ export interface RawCasResult {
 /** Chat-style applications disagree on the send chord; the modifier is the caller's choice. */
 export type SubmitModifier = 'none' | 'shift' | 'command'
 
+/** The process holding the Secure Event Input grab. Best effort: macOS documents no reliable
+ *  API, and the pid can be wrong or absent when the grab was taken from the background. */
+export interface SecureInputCulprit {
+  pid: number
+  name: string
+  bundleId: string
+}
+
+/** A rectangle in global screen coordinates. */
+export interface ScreenRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RawReplaceResult {
+  ok: boolean
+  /** 'element-gone' | 'encoding-failed' | 'unsupported', or null on success. */
+  error: string | null
+}
+
+export interface RawConfirmResult {
+  ok: boolean
+  /** False when the element exposes no confirm action at all — the caller falls back to a chord. */
+  advertised: boolean
+}
+
 export interface RawPasteboardSnapshot {
   token: string
   changeCount: number
@@ -98,6 +126,11 @@ export interface RawPasteboardSnapshot {
 export interface NativeBridge {
   isAccessibilityTrusted(): boolean
   isSecureInputEnabled(): boolean
+  /** Names the app holding the secure-input grab, or null when nothing holds it (or the OS
+   *  will not say). */
+  secureInputCulprit(): SecureInputCulprit | null
+  /** The modifier flags the user is physically holding, as a CGEventFlags mask. */
+  currentModifierFlags(): number
   frontmostApp(): AppIdentity | null
   readFocusedElement(
     pid: number,
@@ -153,6 +186,23 @@ export interface NativeBridge {
     timeoutMs: number,
     valueMaxChars: number
   ): Promise<RawWriteResult>
+  /** The caret's on-screen rectangle (zero width), for anchoring UI to the insertion point. */
+  caretBounds(token: string, timeoutMs: number): Promise<ScreenRect | null>
+  /**
+   * One-call range replace via `AXReplaceRangeWithText`. On AppKit it routes through the
+   * element's input context (native undo coalescing, delegate notifications); on WebKit it is a
+   * real editing command; Chromium advertises but does not implement it, so callers treat
+   * `ok: false` as "take the next rung" rather than an error.
+   */
+  replaceRange(
+    token: string,
+    start: number,
+    length: number,
+    text: string,
+    timeoutMs: number
+  ): Promise<RawReplaceResult>
+  /** Performs the element's confirm action, when it advertises one — a keystroke-free submit. */
+  confirmElement(token: string, timeoutMs: number): Promise<RawConfirmResult>
   postPaste(expectedPid: number): boolean
   postReturn(expectedPid: number, modifier: SubmitModifier): boolean
   postBackspace(expectedPid: number): boolean

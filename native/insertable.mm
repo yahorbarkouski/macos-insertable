@@ -1740,9 +1740,14 @@ bool PostKeyToFrontmost(pid_t expectedPid, CGKeyCode keyCode, CGKeyCode modifier
  * Dvorak or Colemak, keycode 9 under Command is ⌘K/⌘…, a different (possibly destructive)
  * command. The two families need opposite answers, so: QWERTY-⌘ variants (input source id
  * carries "QWERTYCMD") keep the physical code, everything else resolves the character through
- * UCKeyTranslate over the layout's own mapping. Resolved fresh per chord — the scan is a few
- * microseconds, entirely in-process, and caching would need a layout-change observer that a
- * run-loop-less host can never service.
+ * UCKeyTranslate over the layout's own mapping.
+ *
+ * Resolved fresh per chord rather than cached: a cache would need a layout-change observer, and
+ * observers need a serviced run loop this library deliberately does not require. Measured cost —
+ * 4µs per steady-state call (128 keycodes, entirely in-process), behind a one-time ~47ms of Text
+ * Input Source subsystem initialization on the first call in a process. That first-call cost
+ * lands on the first paste of a session; any TSM use would pay it, and a caller who cares can
+ * spend it early by resolving once at startup.
  */
 CGKeyCode KeyCodeForChar(UniChar wanted, CGKeyCode physicalFallback) {
   TISInputSourceRef layout = TISCopyCurrentKeyboardLayoutInputSource();

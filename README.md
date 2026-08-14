@@ -58,11 +58,12 @@ This library takes the opposite contract:
 
 - **Detection over guessing.** An element is a text field because of what it *advertises* —
   text content, an insertion point, and **evidence it is actually editable** (a settable
-  value/selection, or Chromium's `AXEditableAncestor` markers) — not because its role is on a
-  list. Rich editors routinely focus an `AXGroup` container that matches no text role, and a
-  role allowlist rejects all of them. The editability clause matters in the other direction:
-  Chromium hands the caret vocabulary to *everything*, including read-only chat transcripts
-  and buttons, because selection exists for reading — measured, and excluded.
+  value/selection, or the `AXEditableAncestor` markers) — not because its role is on a list.
+  Rich editors routinely focus an `AXGroup` container that matches no text role, and a role
+  allowlist rejects all of them. The editability clause matters in the other direction: modern
+  AppKit synthesizes the caret vocabulary onto *everything* — read-only chat transcripts, even
+  Finder buttons — so a caret attribute alone is not evidence. (Verified against Chromium and
+  WebKit source; the two engines discriminate through opposite halves of that conjunction.)
 - **Capture now, deliver later.** The focused element is pinned at capture (a live reference
   inside the target app) and re-proven before every write. Focus moved on? The insert **refuses
   with a typed reason** instead of writing into the wrong field.
@@ -97,12 +98,18 @@ Synchronous, touches nothing outside your process. Call it at startup and whenev
 explain to the user why nothing is happening.
 
 ```ts
-const { supported, trusted, secureInput } = checkAccess()
+const { supported, trusted, secureInput, secureInputHolder } = checkAccess()
 
 if (!supported)  // not macOS, or addon not built — library is inert, your app still runs
 if (!trusted)    // user hasn't granted Accessibility → send them to System Settings
 if (secureInput) // a password field is open SOMEWHERE on the system — delivery will refuse
+                 // secureInputHolder?.name tells you WHERE: "quit the prompt in 1Password"
 ```
+
+`secureInputHolder` turns an unactionable refusal into an instruction. macOS documents no
+reliable way to ask who holds the grab, so it is best effort (null when the OS won't say, and
+the pid can be wrong for a grab taken while the holder was in the background) — but when it
+answers, it names the app.
 
 The `secureInput` flag is the one people don't expect: while any app has a password field up,
 macOS suppresses synthetic input system-wide. Knowing this *before* the user dictates a
@@ -296,7 +303,29 @@ await captured.submit('command')    // ⌘-Enter — chat apps disagree on the s
 ```
 
 Same guarantees as insertion: the element is re-proven first, so Enter cannot be pressed in a
-different application than the one captured (`'app-changed'` refusal instead).
+different application than the one captured (`'app-changed'` refusal instead). For the
+unmodified chord the element's own **confirm action** is tried first where it exposes one —
+that commits the field through the application's own handler, with no synthetic event for
+modifier state or a focus change to distort.
+
+## Knowing where the text is going
+
+```ts
+using captured = await captureFocusedField()
+if (captured.status !== 'field') return
+
+captured.traits.terminal      // a shell executes on newlines — gate multiline and submit
+await captured.caretBounds()  // { x, y, width: 0, height } in screen coordinates, or null
+```
+
+`traits.terminal` exists for a safety reason, not a cosmetic one: text delivered into a
+terminal is *executed* on its newlines, so a dictated paragraph that wraps becomes a sequence
+of shell commands, and a submit chord runs whatever sits on the prompt. The accessibility tree
+cannot express "this is a shell" — a terminal's text area looks like any other — so this is
+bundle-identifier evidence, kept as a short auditable list.
+
+`caretBounds()` is the anchor for caret-adjacent UI: a dictation HUD, ghost text, a correction
+popover. Zero width, real line height, screen coordinates.
 
 ## Every refusal, grouped
 
@@ -305,6 +334,7 @@ empty-text · no-permission · secure-input · released           you / your pro
 app-changed · element-changed · element-gone                   the world moved on → "click back into the field"
 read-only · element-disabled                                   the field says no
 selection-in-the-way · no-selection · unreadable-replace-all   mode doesn't fit reality
+modifiers-held                                                 the user is still on their hotkey
 paste-not-posted · paste-did-not-land · type-failed            delivery genuinely failed
 draft-drifted · range-write-failed · no-caret ·                draft-specific: the user edited the
 opaque-surface · submit-not-posted                             region, or the surface can't range-edit
@@ -333,9 +363,16 @@ insert(text)
 
 Details that took the scars to learn, so you don't have to:
 
-- ⌘V is posted as **real modifier key events** around the V keystroke, not just event flags —
-  Chromium-family apps track modifiers from the event stream and treat a flag-only chord as a
-  bare `v`.
+- ⌘V is posted as **real modifier key events** around the V keystroke, not just event flags.
+  Some toolkits track modifiers from the event stream they receive and read a flag-only chord as
+  a bare `v`; posting the real chord is the superset that costs nothing.
+- The **V keycode is resolved for the current layout**, not hardcoded. Physical keycode 9 is "V"
+  on QWERTY-shaped layouts, but on plain Dvorak or Colemak that same key under Command is a
+  different — possibly destructive — command. Layouts in the "— QWERTY ⌘" family, which remap
+  while Command is held, keep the physical code.
+- **The user's own modifiers are waited out** before anything synthetic is posted. Hotkey-driven
+  callers deliver at the instant a chord is released; a ⌘V that goes out while ⌘⇧ is still down
+  is a different shortcut. The Accessibility rung skips the wait — it posts no events.
 - Focus is read from the **window server's window list**, not `NSWorkspace` and not the AX
   system-wide focused application: both are notification-fed caches that silently freeze at
   their first answer in a process without a serviced run loop — i.e. every plain Node.js

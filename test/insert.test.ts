@@ -132,6 +132,93 @@ describe('preflight refusals', () => {
   })
 })
 
+describe('rung 1 — the one-call range replace, preferred where implemented', () => {
+  it('replaces through AXReplaceRangeWithText when the element implements it', async () => {
+    // AppKit routes this through the input context — native undo, delegate notifications — so
+    // it is tried before setting attributes directly.
+    const bridge = fakeBridge({
+      replaceRange: vi.fn(async () => ({ ok: true, error: null })),
+      readElementState: vi
+        .fn<NativeBridge['readElementState']>()
+        .mockResolvedValueOnce(textState())
+        .mockResolvedValue(textState({ value: 'hello world' }))
+    })
+    const captured = await capturedWith(bridge)
+    expect(await captured.insert(' world')).toEqual({ delivered: true, via: 'accessibility' })
+    expect(bridge.replaceRange).toHaveBeenCalledWith('ax-1', 5, 0, ' world', expect.any(Number))
+    expect(bridge.setSelectedText).not.toHaveBeenCalled()
+  })
+
+  it('targets the selection range in selection mode', async () => {
+    const bridge = fakeBridge({
+      replaceRange: vi.fn(async () => ({ ok: true, error: null })),
+      readElementState: vi
+        .fn<NativeBridge['readElementState']>()
+        .mockResolvedValueOnce(textState({ selectionStart: 1, selectionLength: 3 }))
+        .mockResolvedValue(textState({ value: 'hXo' }))
+    })
+    const captured = await capturedWith(bridge, { selectionStart: 1, selectionLength: 3 })
+    await captured.insert('X', { mode: 'selection' })
+    expect(bridge.replaceRange).toHaveBeenCalledWith('ax-1', 1, 3, 'X', expect.any(Number))
+  })
+
+  it('targets the whole value in replace-all mode', async () => {
+    const bridge = fakeBridge({
+      replaceRange: vi.fn(async () => ({ ok: true, error: null })),
+      readElementState: vi
+        .fn<NativeBridge['readElementState']>()
+        .mockResolvedValueOnce(textState({ value: 'hello' }))
+        .mockResolvedValue(textState({ value: 'replaced' }))
+    })
+    const captured = await capturedWith(bridge)
+    await captured.insert('replaced', { mode: 'all' })
+    expect(bridge.replaceRange).toHaveBeenCalledWith('ax-1', 0, 5, 'replaced', expect.any(Number))
+  })
+
+  it('falls through to the two-step write where the attribute is inert (Chromium)', async () => {
+    // Chromium advertises AXReplaceRangeWithText without implementing it — an ordinary answer,
+    // not an error.
+    const bridge = fakeBridge()
+    const captured = await capturedWith(bridge)
+    expect(await captured.insert(' world')).toEqual({ delivered: true, via: 'accessibility' })
+    expect(bridge.replaceRange).toHaveBeenCalled()
+    expect(bridge.setSelectedText).toHaveBeenCalled()
+  })
+
+  it('does not trust a replace that reports success but changed nothing', async () => {
+    // The call returns a bare boolean; a wrong parameter key deletes the range and still says
+    // yes, so the read-back is what decides.
+    const bridge = fakeBridge({
+      replaceRange: vi.fn(async () => ({ ok: true, error: null })),
+      readElementState: vi.fn(async () => textState())
+    })
+    const captured = await capturedWith(bridge)
+    await captured.insert(' world')
+    expect(bridge.setSelectedText).toHaveBeenCalled()
+  })
+})
+
+describe('modifier gate before synthetic input', () => {
+  it('refuses to post a paste while the user still holds a chord', async () => {
+    const bridge = fakeBridge({
+      setSelectedText: vi.fn(async () => ({ ok: false, error: 'refused', after: null })),
+      currentModifierFlags: vi.fn(() => 0x100000)
+    })
+    const captured = await capturedWith(bridge)
+    expect(await captured.insert(' world', { waitForModifiersMs: 1 })).toEqual({
+      delivered: false,
+      reason: 'modifiers-held'
+    })
+    expect(bridge.postPaste).not.toHaveBeenCalled()
+  })
+
+  it('never gates the accessibility rung — it posts no events', async () => {
+    const bridge = fakeBridge({ currentModifierFlags: vi.fn(() => 0x100000) })
+    const captured = await capturedWith(bridge)
+    expect(await captured.insert(' world')).toEqual({ delivered: true, via: 'accessibility' })
+  })
+})
+
 describe('rung 1 — verified accessibility write', () => {
   it('delivers a caret insert through setSelectedText and verifies in the same trip', async () => {
     const bridge = fakeBridge()

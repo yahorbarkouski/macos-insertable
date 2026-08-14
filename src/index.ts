@@ -17,12 +17,17 @@ import type { Access, Capture, CaptureOptions, InsertOptions, InsertResult } fro
 
 export type {
   NativeBridge,
+  RawConfirmResult,
   RawElementIdentity,
   RawFocusedElement,
   RawPasteboardSnapshot,
+  RawReplaceResult,
   RawTextState,
   RawVerifyResult,
-  RawWriteResult
+  RawWriteResult,
+  ScreenRect,
+  SecureInputCulprit,
+  SubmitModifier
 } from './bridge.js'
 export type { CaptureResult, StartDraftResult, SubmitResult } from './capture.js'
 export { CapturedField, captureFocusedField, readFocusedField } from './capture.js'
@@ -31,6 +36,8 @@ export { buildIdentity, classify, hasTextCapability, LABEL_MAX_CHARS } from './c
 export type { DraftUpdateResult, MinimalEdit } from './draft.js'
 export { Draft, minimalEdit } from './draft.js'
 export { didTextLand, readCarriesEvidence } from './insert.js'
+export { waitForModifiersReleased } from './modifiers.js'
+export { traitsFor } from './traits.js'
 export type {
   Access,
   AppIdentity,
@@ -44,17 +51,24 @@ export type {
   InsertRefusal,
   InsertResult,
   InsertStrategy,
-  Surface
+  Surface,
+  TargetTraits
 } from './types.js'
 
 /** Permission and environment state, checked without touching any other process. */
 export function checkAccess(options: Pick<CaptureOptions, 'bridge'> = {}): Access {
   const bridge = options.bridge ?? loadBridge()
-  if (!bridge) return { supported: false, trusted: false, secureInput: false }
+  if (!bridge) {
+    return { supported: false, trusted: false, secureInput: false, secureInputHolder: null }
+  }
+  const secureInput = bridge.isSecureInputEnabled()
   return {
     supported: true,
     trusted: bridge.isAccessibilityTrusted(),
-    secureInput: bridge.isSecureInputEnabled()
+    secureInput,
+    // Only asked when it can answer: the lookup walks the IO registry, and a null answer while
+    // secure input is off would be indistinguishable from "the OS would not say".
+    secureInputHolder: secureInput ? bridge.secureInputCulprit() : null
   }
 }
 

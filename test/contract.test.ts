@@ -21,6 +21,11 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     const expected = [
       'isAccessibilityTrusted',
       'isSecureInputEnabled',
+      'secureInputCulprit',
+      'currentModifierFlags',
+      'caretBounds',
+      'replaceRange',
+      'confirmElement',
       'frontmostApp',
       'readFocusedElement',
       'readElementState',
@@ -52,6 +57,33 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     expect(typeof need().pasteboardChangeCount()).toBe('number')
     const front = need().frontmostApp()
     expect(front === null || typeof front.pid === 'number').toBe(true)
+  })
+
+  it('reports the secure-input holder as a named app or null, never a throw', () => {
+    // Null is the normal answer: nothing holds the grab, or macOS will not say who does.
+    const culprit = need().secureInputCulprit()
+    if (culprit !== null) {
+      expect(typeof culprit.pid).toBe('number')
+      expect(typeof culprit.name).toBe('string')
+    }
+    // Consistency: a holder can only exist while secure input is actually on.
+    if (!need().isSecureInputEnabled()) expect(culprit).toBeNull()
+  })
+
+  it('reports live modifier flags as a mask of the four shortcut modifiers', () => {
+    const flags = need().currentModifierFlags()
+    expect(Number.isInteger(flags)).toBe(true)
+    // Nothing outside Command/Shift/Control/Option may appear in the mask.
+    expect(flags & ~(0x100000 | 0x20000 | 0x40000 | 0x80000)).toBe(0)
+  })
+
+  it('treats caret bounds, replace and confirm as typed answers on a stale token', async () => {
+    expect(await need().caretBounds('ax-does-not-exist', 100)).toBeNull()
+    const replaced = await need().replaceRange('ax-does-not-exist', 0, 1, 'x', 100)
+    expect(replaced.ok).toBe(false)
+    expect(replaced.error).toBe('element-gone')
+    const confirmed = await need().confirmElement('ax-does-not-exist', 100)
+    expect(confirmed).toEqual({ ok: false, advertised: false })
   })
 
   it('treats a stale element token as a typed result, never a crash', async () => {
@@ -90,6 +122,9 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     await expect(b.setValue?.({})).rejects.toThrow()
     await expect(b.setSelectedTextRange?.('token-only')).rejects.toThrow()
     await expect(b.casRangeEdit?.('token', 0, 'x')).rejects.toThrow()
+    await expect(b.caretBounds?.('token-only')).rejects.toThrow()
+    await expect(b.replaceRange?.('token', 0)).rejects.toThrow()
+    await expect(b.confirmElement?.(42)).rejects.toThrow()
     await expect(b.typeUnicode?.('not-a-pid')).rejects.toThrow()
     expect(need().postPaste(Number.NaN)).toBe(false)
     expect(need().pasteboardRestore('pb-does-not-exist')).toBe(false)
