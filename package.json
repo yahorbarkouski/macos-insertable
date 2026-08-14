@@ -46,7 +46,7 @@
     "build": "tsup",
     "build:native": "node-gyp rebuild",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check .",
+    "lint": "biome check . && node scripts/check-native-architecture.cjs",
     "lint:fix": "biome check --write .",
     "test": "vitest run test/classify.test.ts test/capture.test.ts test/insert.test.ts test/draft.test.ts test/traits.test.ts test/spacing.test.ts",
     "test:contract": "vitest run test/contract.test.ts",

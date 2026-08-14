@@ -5,6 +5,7 @@
  * assert only the shape of their answers).
  */
 
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 import { loadBridge } from '../src/addon.js'
@@ -132,9 +133,59 @@ describe.skipIf(bridge === null)('native addon contract', () => {
 
   it('rejects malformed numeric ranges before queuing native work', async () => {
     const b = need() as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+    await expect(b.readFocusedElement?.(Number.NaN, 100, 1000)).rejects.toThrow(TypeError)
+    await expect(b.readFocusedElement?.(42.5, 100, 1000)).rejects.toThrow(TypeError)
+    await expect(b.setSelectedTextRange?.('ax-does-not-exist', 0, -1, 100)).rejects.toThrow(
+      TypeError
+    )
+    await expect(
+      b.replaceRange?.('ax-does-not-exist', 0, Number.POSITIVE_INFINITY, 'x', 100)
+    ).rejects.toThrow(TypeError)
     await expect(
       b.casRangeEdit?.('ax-does-not-exist', 0, 'x', 1, 0, 'y', -1, -1, 0, 100)
     ).rejects.toThrow(TypeError)
+    await expect(b.typeUnicode?.(Number.NEGATIVE_INFINITY, 'x')).rejects.toThrow(TypeError)
+
+    await expect(
+      b.casRangeEdit?.('ax-does-not-exist', 0, 'x', 0, 1, 'y', -42, -9, 0.5, 100)
+    ).resolves.toMatchObject({ ok: false, reason: 'element-gone' })
+  })
+
+  it('survives worker-environment teardown after queueing native work', () => {
+    const probe = String.raw`
+      const { Worker } = require('node:worker_threads')
+      const root = process.cwd()
+      const source = [
+        "const { parentPort, workerData } = require('node:worker_threads')",
+        "const addon = require('node-gyp-build')(workerData.root)",
+        'const snapshot = addon.pasteboardSnapshot()',
+        'addon.readFocusedElement(21474836, 100, 1000)',
+        'parentPort.postMessage(snapshot.token)',
+        'setInterval(() => {}, 1000)'
+      ].join('\n')
+      ;(async () => {
+        for (let index = 0; index < 10; index += 1) {
+          const worker = new Worker(source, { eval: true, workerData: { root } })
+          const token = await new Promise((resolve, reject) => {
+            worker.once('message', resolve)
+            worker.once('error', reject)
+          })
+          if (token !== 'pb-1') throw new Error('state leaked across environments: ' + token)
+          await worker.terminate()
+        }
+      })().catch((error) => {
+        console.error(error)
+        process.exitCode = 1
+      })
+    `
+    const child = spawnSync(process.execPath, ['--eval', probe], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 15_000
+    })
+    expect(child.error, child.stderr).toBeUndefined()
+    expect(child.signal, child.stderr).toBeNull()
+    expect(child.status, child.stderr).toBe(0)
   })
 
   it('holds a pasteboard snapshot across the gap it protects', async () => {

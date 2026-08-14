@@ -8,11 +8,25 @@
           {
             "cflags!": ["-fno-exceptions"],
             "cflags_cc!": ["-fno-exceptions"],
-            "sources": ["native/insertable.mm"],
+            "sources": [
+              "native/accessibility_cas.mm",
+              "native/accessibility_edit.mm",
+              "native/accessibility_internal.mm",
+              "native/accessibility_read.mm",
+              "native/addon.mm",
+              "native/addon_state.mm",
+              "native/input.mm",
+              "native/napi_support.mm",
+              "native/pasteboard.mm",
+              "native/system.mm"
+            ],
             "include_dirs": [
               "<!@(node -p \"require('node-addon-api').include\")"
             ],
-            "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
+            "defines": [
+              "NAPI_DISABLE_CPP_EXCEPTIONS",
+              "NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS"
+            ],
             "xcode_settings": {
               "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
               "CLANG_CXX_LIBRARY": "libc++",
