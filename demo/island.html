@@ -86,11 +86,8 @@
     <div class="detail" id="detail"></div>
     <div class="grid" id="grid">
       <button data-act="insert">Insert</button>
-      <button data-act="batch">Snippets ×3</button>
       <button data-act="stream">Stream ⚡</button>
       <button data-act="scratch">Scratch that</button>
-      <button data-act="improveAll">Improve all</button>
-      <button data-act="improveSelection">Improve sel.</button>
       <button data-act="send" style="grid-column: span 3">Insert + Send ↩</button>
     </div>
     <div class="log" id="log"></div>
@@ -140,7 +137,7 @@
 
     const usable = state.status === 'field' && !state.secureInput
     for (const button of buttons) {
-      const needsReadable = ['stream', 'scratch', 'improveAll', 'improveSelection'].includes(
+      const needsReadable = ['stream', 'scratch'].includes(
         button.dataset.act
       )
       button.disabled = !usable || (needsReadable && state.field?.surface !== 'readable')

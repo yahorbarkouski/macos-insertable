@@ -79,19 +79,6 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** Deterministic stand-in for an LLM cleanup, so the demo has no keys and no network. */
-function improve(text) {
-  const tidy = text
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\bi\b/g, 'I')
-    .replace(/\btheir going\b/gi, "they're going")
-  const sentences = tidy
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s))
-    .join(' ')
-  return sentences && !/[.!?]$/.test(sentences) ? `${sentences}.` : sentences
-}
 
 async function withCapturedField(run) {
   const captured = await lib.captureFocusedField()
@@ -118,20 +105,6 @@ const actions = {
     )
   },
 
-  /** Three snippets in a row — repeated verified inserts against one pinned element. */
-  async batch() {
-    await withCapturedField(async (captured) => {
-      for (const line of ['First snippet. ', 'Second snippet. ', 'Third snippet. ']) {
-        const result = await captured.insert(line)
-        if (!result.delivered) {
-          log(`batch stopped: ${result.reason}`, 'bad')
-          return
-        }
-        await wait(350)
-      }
-      log('batch: 3 inserts, all verified', 'good')
-    })
-  },
 
   /** The showpiece: words appear while "spoken", then one word is revised in place. */
   async stream() {
@@ -194,38 +167,7 @@ const actions = {
     })
   },
 
-  /** Read the whole field, clean it up, replace it — only through the verified write. */
-  async improveAll() {
-    await withCapturedField(async (captured) => {
-      const fresh = await captured.reread()
-      if (!fresh || fresh.surface !== 'readable' || fresh.value.length === 0) {
-        log('improve needs a readable, non-empty field', 'bad')
-        return
-      }
-      const better = improve(fresh.value)
-      if (better === fresh.value) {
-        log('already clean — nothing to improve', 'dim')
-        return
-      }
-      const result = await captured.insert(better, { mode: 'all' })
-      log(result.delivered ? 'improved the whole field (verified replace-all)' : `refused: ${result.reason}`,
-        result.delivered ? 'good' : 'bad')
-    })
-  },
 
-  /** Improve just the selection — the selection-replacement mode. */
-  async improveSelection() {
-    await withCapturedField(async (captured) => {
-      const fresh = await captured.reread()
-      if (!fresh?.selectedText) {
-        log('select some text first', 'bad')
-        return
-      }
-      const result = await captured.insert(improve(fresh.selectedText), { mode: 'selection' })
-      log(result.delivered ? 'replaced the selection with its cleaned-up form' : `refused: ${result.reason}`,
-        result.delivered ? 'good' : 'bad')
-    })
-  },
 
   /** Insert, then press the send chord — the dictate-and-send flow. */
   async send() {
@@ -262,7 +204,7 @@ app.whenReady().then(() => {
   app.dock?.hide()
   window = new BrowserWindow({
     width: 420,
-    height: 308,
+    height: 268,
     frame: false,
     transparent: true,
     resizable: false,

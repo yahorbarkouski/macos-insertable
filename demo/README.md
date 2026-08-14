@@ -46,15 +46,16 @@ password box → *Password field — refused*, with every button dead; a button 
 
 ## Buttons → capabilities
 
-| Button | Demonstrates |
+| Button | Library call |
 | --- | --- |
-| **Insert** | one-shot verified insert at the caret (`insertText`) |
-| **Snippets ×3** | repeated inserts against one pinned element (`captureFocusedField` + `insert`) |
-| **Stream ⚡** | the draft: partials appear word-by-word, then `their → they're` is revised **in place** — per-update latency printed in the log |
-| **Scratch that** | streams a wrong take, then `update('')` — the region empties, nothing else is touched |
-| **Improve all** | reads the field, cleans it up (deterministic transform — no LLM, no network), verified replace-all |
-| **Improve sel.** | select some text first — replaces just the selection with its cleaned-up form |
-| **Insert + Send** | insert, then the send chord (`submit()`) — dictate-and-send |
+| **Insert** | `insertText` — one-shot verified insert at the caret |
+| **Stream ⚡** | `startDraft` + `draft.update(partial)` — words appear while "spoken", then `their → they're` revised **in place**, per-update latency in the log |
+| **Scratch that** | `draft.update('')` — a wrong take streams in, then the region empties; nothing else is touched |
+| **Insert + Send** | `insert` + `submit()` — dictate-and-send |
+
+Every button is exactly one public API flow — no demo-side text transforms pretending to be
+library features. (`insert` also has `mode: 'selection'` and `mode: 'all'`; they are exercised
+by the test suite rather than given buttons.)
 
 The log line at the bottom shows the typed result of every action — including refusals, which
 are half the point: click Insert while a password field is focused and watch the library say
@@ -64,7 +65,6 @@ no, with a reason.
 
 1. Open TextEdit next to the island. Click into it — title flips to *verified writes*.
 2. **Stream ⚡**, then **Scratch that** — the headline features.
-3. Type `their going home. i think its good`, then **Improve all**.
-4. Focus Safari's address bar, a password field, a plain button — watch the title rename
+3. Focus Safari's address bar, a password field, a plain button — watch the title rename
    itself and the buttons die on the password field.
-5. Open Messages, click the compose field, **Insert + Send**.
+4. Open Messages, click the compose field, **Insert + Send**.
