@@ -1,0 +1,57 @@
+name: Release
+
+# Publishing runs from a tag so the published artifact always corresponds to a commit anyone can
+# check out. It runs on macOS because the prebuilt binaries have to be compiled here, and with
+# id-token permission so npm records build provenance: the published tarball is then traceable to
+# this workflow run and this commit.
+#
+# One-time setup: add an npm automation token as the NPM_TOKEN repository secret.
+# To release: bump the version, update CHANGELOG.md, then
+#   git tag v0.5.0 && git push --tags
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install
+
+      - name: Check the tag matches the version being published
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $version" >&2
+            exit 1
+          fi
+
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm test:contract
+
+      # Both architectures, N-API so each covers every Node and Electron version.
+      - run: pnpm prebuild
+
+      # prepublishOnly builds and runs the publish guard; --provenance needs npm 11+.
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -74,8 +74,21 @@ Things that look like obvious additions and are not, so nobody re-derives the re
 
 ## Releasing
 
-1. `pnpm typecheck && pnpm lint && pnpm test && pnpm test:contract && pnpm test:e2e`
-2. Bump the version, update `CHANGELOG.md`.
-3. `prebuildify --napi --strip` on an arm64 Mac (and x64, or cross-compile) so consumers
-   install without a compiler; the loader (`node-gyp-build`) prefers `prebuilds/`.
-4. `npm publish`.
+Releases publish from CI, so the tarball on npm always corresponds to a commit anyone can check
+out, and npm records build provenance against the workflow run.
+
+1. Run the gate locally, including the end-to-end suite that CI cannot run:
+   `pnpm typecheck && pnpm lint && pnpm test && pnpm test:contract && pnpm test:e2e`
+2. Bump the version and add its `CHANGELOG.md` entry. The publish guard refuses to publish when
+   the two disagree.
+3. Tag and push: `git tag v0.5.0 && git push --tags`.
+
+The workflow builds both architectures, re-runs the checks, and publishes. One-time setup: an
+npm automation token in the `NPM_TOKEN` repository secret.
+
+To publish by hand instead, `npm run prebuild && npm publish`. `prepublishOnly` builds and runs
+`scripts/prepublish-check.cjs`, which refuses to publish without build output, without a prebuild
+for each architecture, or when the changelog and the version disagree.
+
+Prebuilt binaries are not committed. They are built per release, and N-API keeps each one
+ABI-stable across every Node and Electron version, so one per architecture is enough.

@@ -15,7 +15,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yahorbarkouski/macos-insertable.git"
+    "url": "git+https://github.com/yahorbarkouski/macos-insertable.git"
   },
   "type": "module",
   "main": "./dist/index.cjs",
@@ -48,10 +48,12 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "vitest run test/classify.test.ts test/capture.test.ts test/insert.test.ts",
+    "test": "vitest run test/classify.test.ts test/capture.test.ts test/insert.test.ts test/draft.test.ts test/traits.test.ts test/spacing.test.ts",
     "test:contract": "vitest run test/contract.test.ts",
     "test:e2e": "vitest run test/e2e/insert.e2e.test.ts test/e2e/chromium.e2e.test.ts",
-    "test:all": "vitest run"
+    "test:all": "vitest run",
+    "prebuild": "prebuildify --napi --strip --arch arm64 && prebuildify --napi --strip --arch x64",
+    "prepublishOnly": "npm run build && node scripts/prepublish-check.cjs"
   },
   "dependencies": {
     "node-addon-api": "^8.5.0",
@@ -61,8 +63,13 @@
     "@biomejs/biome": "^2.3.13",
     "@types/node": "^24.10.9",
     "node-gyp": "^11.4.2",
+    "prebuildify": "^6.0.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/yahorbarkouski/macos-insertable/issues"
+  },
+  "homepage": "https://github.com/yahorbarkouski/macos-insertable#readme"
 }

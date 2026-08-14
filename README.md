@@ -1,5 +1,9 @@
 # macos-insertable
 
+[![npm](https://img.shields.io/npm/v/macos-insertable.svg)](https://www.npmjs.com/package/macos-insertable)
+[![CI](https://github.com/yahorbarkouski/macos-insertable/actions/workflows/ci.yml/badge.svg)](https://github.com/yahorbarkouski/macos-insertable/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/macos-insertable.svg)](./LICENSE)
+
 Find the text field the user is working in, learn whether text can be put there, and put it
 there. Every write is verified: if the text did not land, you get a reason instead of a false
 success.
