@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+- Draft updates fused into one native transaction (`casRangeEdit`): compare-and-swap on the
+  text region — prove focus (CFEqual), compare the region, replace the TS-computed span,
+  verify over the region only via `AXStringForRange` (O(edit), never O(document)), park the
+  caret — atomically in a single worker trip instead of six dispatches and ~20 AX round trips.
+  Benchmarked in E2E: **p50 0.9ms** per update, flat ~7–8ms after a 10k-character document.
+- The draft hot path drops the frontmost check (AX writes land on the referenced element —
+  no misdirection exists for it to prevent; streaming now correctly continues when the app is
+  briefly backgrounded) and the per-update identity re-read (the content precondition is
+  strictly stronger). `DraftUpdateResult` loses `app-changed`/`element-disabled` accordingly.
+- Caret parking became polite: a caret the user moved mid-stream is no longer yanked back;
+  parking resumes only if they return it to where the draft left it.
+
 ## 0.2.0
 
 - `CapturedField.startDraft()` → `Draft`: a revisable region reconciled to new text with

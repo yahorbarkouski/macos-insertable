@@ -72,6 +72,7 @@ export function fakeBridge(overrides: Partial<NativeBridge> = {}): NativeBridge 
       selectionStart: start,
       selectionLength: length
     })),
+    casRangeEdit: vi.fn(async () => ({ ok: true, reason: null, parked: true })),
     postReturn: vi.fn(() => true),
     setSelectedText: vi.fn(async () => ({
       ok: true,

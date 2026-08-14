@@ -28,6 +28,7 @@ describe.skipIf(bridge === null)('native addon contract', () => {
       'verifyElement',
       'setSelectedText',
       'setSelectedTextRange',
+      'casRangeEdit',
       'setValue',
       'postPaste',
       'postReturn',
@@ -62,6 +63,9 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     const aim = await need().setSelectedTextRange('ax-does-not-exist', 0, 1, 100)
     expect(aim.ok).toBe(false)
     expect(aim.error).toBe('unknown-token')
+    const cas = await need().casRangeEdit('ax-does-not-exist', 0, 'x', 0, 1, 'y', -1, -1, 100)
+    expect(cas.ok).toBe(false)
+    expect(cas.reason).toBe('element-gone')
   })
 
   it('refuses an unknown submit modifier instead of guessing a chord', () => {
@@ -85,6 +89,7 @@ describe.skipIf(bridge === null)('native addon contract', () => {
     await expect(b.verifyElement?.('token-only')).rejects.toThrow()
     await expect(b.setValue?.({})).rejects.toThrow()
     await expect(b.setSelectedTextRange?.('token-only')).rejects.toThrow()
+    await expect(b.casRangeEdit?.('token', 0, 'x')).rejects.toThrow()
     await expect(b.typeUnicode?.('not-a-pid')).rejects.toThrow()
     expect(need().postPaste(Number.NaN)).toBe(false)
     expect(need().pasteboardRestore('pb-does-not-exist')).toBe(false)

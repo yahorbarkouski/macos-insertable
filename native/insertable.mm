@@ -595,6 +595,242 @@ class SetTextWorker : public PromiseWorker {
 };
 
 /**
+ * Reads only [range] of the element's text via the parameterized AXStringForRange attribute,
+ * falling back to slicing a full value read for views that do not implement it. Either way the
+ * caller pays O(range) marshalling, not O(document). Caller CFReleases *out on true.
+ */
+bool CopyStringForRange(AXUIElementRef element, CFRange range, CFStringRef* out) {
+  AXValueRef rangeValue = AXValueCreate(kAXValueTypeCFRange, &range);
+  if (rangeValue) {
+    CFTypeRef result = NULL;
+    AXError err = AXUIElementCopyParameterizedAttributeValue(
+        element, kAXStringForRangeParameterizedAttribute, rangeValue, &result);
+    CFRelease(rangeValue);
+    if (err == kAXErrorSuccess && result) {
+      if (CFGetTypeID(result) == CFStringGetTypeID()) {
+        *out = static_cast<CFStringRef>(result);
+        return true;
+      }
+      CFRelease(result);
+    }
+  }
+  CFTypeRef value = NULL;
+  if (AXUIElementCopyAttributeValue(element, kAXValueAttribute, &value) != kAXErrorSuccess ||
+      !value) {
+    return false;
+  }
+  if (CFGetTypeID(value) != CFStringGetTypeID()) {
+    CFRelease(value);
+    return false;
+  }
+  CFStringRef whole = static_cast<CFStringRef>(value);
+  CFIndex length = CFStringGetLength(whole);
+  if (range.location > length || range.location + range.length > length) {
+    CFRelease(whole);
+    return false;
+  }
+  CFStringRef slice = CFStringCreateWithSubstring(kCFAllocatorDefault, whole, range);
+  CFRelease(whole);
+  if (!slice) return false;
+  *out = slice;
+  return true;
+}
+
+/** Whether the element's text over [location, location+expected.size()) equals `expected`. */
+bool RegionEquals(AXUIElementRef element, CFIndex location, const std::u16string& expected) {
+  if (expected.empty()) return true;
+  CFStringRef actual = NULL;
+  if (!CopyStringForRange(element,
+                          CFRangeMake(location, static_cast<CFIndex>(expected.size())),
+                          &actual)) {
+    return false;
+  }
+  CFStringRef wanted = CFStringCreateWithCharacters(
+      kCFAllocatorDefault, reinterpret_cast<const UniChar*>(expected.data()),
+      static_cast<CFIndex>(expected.size()));
+  bool equal = wanted && CFStringCompare(actual, wanted, 0) == kCFCompareEqualTo;
+  CFRelease(actual);
+  if (wanted) CFRelease(wanted);
+  return equal;
+}
+
+/**
+ * Compare-and-swap on a text region: the streaming hot path, fused into ONE worker trip.
+ *
+ * Sequence, all against the pinned element without ever crossing back into JavaScript:
+ *   1. prove the element is still its application's focused element (CFEqual — by-reference,
+ *      stronger than any attribute comparison)
+ *   2. compare: the region [regionStart, regionStart+expected.len) must hold exactly `expected`
+ *      — a content precondition strictly stronger than an identity re-read, and the reason no
+ *      frontmost check appears here: an Accessibility write lands on the element it references,
+ *      so unlike the synthetic-event rungs there is no misdirection for a frontmost check to
+ *      prevent
+ *   3. swap: select the TS-computed edit span inside the region and replace the selection
+ *   4. verify the resulting region text, with one blocking settle retry for views that mirror
+ *      their text asynchronously
+ *   5. park the caret at the TS-chosen position — skipped when the live caret was not where the
+ *      last update left it, because then the user moved it and it is not ours to move back
+ *
+ * Every offset is UTF-16 units on both sides (JavaScript strings and CFRange agree), so values
+ * pass through untranslated. The fallback ladder and every retry POLICY stay in TypeScript;
+ * this is one atomic primitive, not a strategy.
+ */
+class CasRangeEditWorker : public PromiseWorker {
+ public:
+  CasRangeEditWorker(Napi::Env env, std::string token, CFIndex regionStart,
+                     std::u16string expected, CFIndex editStart, CFIndex editEnd,
+                     std::u16string replacement, CFIndex parkAt, CFIndex expectedCaret,
+                     double timeoutMs)
+      : PromiseWorker(env),
+        token_(std::move(token)),
+        regionStart_(regionStart),
+        expected_(std::move(expected)),
+        editStart_(editStart),
+        editEnd_(editEnd),
+        replacement_(std::move(replacement)),
+        parkAt_(parkAt),
+        expectedCaret_(expectedCaret),
+        timeoutMs_(timeoutMs) {}
+
+  void Execute() override {
+    AXUIElementRef element = ElementRegistry::Shared().Copy(token_);
+    if (!element) {
+      reason_ = "element-gone";
+      return;
+    }
+    ApplyTimeout(element, timeoutMs_);
+
+    pid_t pid = -1;
+    if (AXUIElementGetPid(element, &pid) != kAXErrorSuccess) {
+      CFRelease(element);
+      reason_ = "element-gone";
+      return;
+    }
+    AXUIElementRef focused = CopyFocusedElement(pid, timeoutMs_);
+    if (!focused) {
+      CFRelease(element);
+      reason_ = "element-gone";
+      return;
+    }
+    bool sameElement = CFEqual(element, focused) ? true : false;
+    CFRelease(focused);
+    if (!sameElement) {
+      CFRelease(element);
+      reason_ = "element-changed";
+      return;
+    }
+
+    // The user's caret, before we touch anything: if it is not where the last update parked
+    // it, the user moved it and the park below must not fight them.
+    bool caretIsOurs = expectedCaret_ < 0;
+    CFRange liveSelection = CFRangeMake(0, 0);
+    if (CopyAxRange(element, kAXSelectedTextRangeAttribute, &liveSelection)) {
+      if (expectedCaret_ >= 0) {
+        caretIsOurs = liveSelection.length == 0 && liveSelection.location == expectedCaret_;
+      }
+    }
+
+    if (!RegionEquals(element, regionStart_, expected_)) {
+      CFRelease(element);
+      reason_ = "region-mismatch";
+      return;
+    }
+
+    CFRange editRange =
+        CFRangeMake(regionStart_ + editStart_, editEnd_ - editStart_);
+    AXValueRef editValue = AXValueCreate(kAXValueTypeCFRange, &editRange);
+    if (!editValue) {
+      CFRelease(element);
+      reason_ = "select-failed";
+      return;
+    }
+    AXError selectError =
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute, editValue);
+    CFRelease(editValue);
+    CFRange placed = CFRangeMake(-1, -1);
+    if (selectError != kAXErrorSuccess ||
+        !CopyAxRange(element, kAXSelectedTextRangeAttribute, &placed) ||
+        placed.location != editRange.location || placed.length != editRange.length) {
+      CFRelease(element);
+      reason_ = "select-failed";
+      return;
+    }
+
+    CFStringRef replacementValue = CFStringCreateWithCharacters(
+        kCFAllocatorDefault, reinterpret_cast<const UniChar*>(replacement_.data()),
+        static_cast<CFIndex>(replacement_.size()));
+    if (!replacementValue) {
+      CFRelease(element);
+      reason_ = "write-failed";
+      return;
+    }
+    AXError writeError =
+        AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute, replacementValue);
+    CFRelease(replacementValue);
+    if (writeError != kAXErrorSuccess) {
+      CFRelease(element);
+      reason_ = "write-failed";
+      return;
+    }
+
+    // The final region = expected with the edit span replaced, spliced here mechanically from
+    // the TS-provided pieces.
+    std::u16string finalRegion = expected_.substr(0, static_cast<size_t>(editStart_));
+    finalRegion += replacement_;
+    finalRegion += expected_.substr(static_cast<size_t>(editEnd_));
+
+    bool landed = RegionEquals(element, regionStart_, finalRegion);
+    if (!landed) {
+      // One blocking settle: Chromium-backed views round-trip to their renderer and briefly
+      // read as the OLD text. The worker thread is the right place to wait it out.
+      usleep(35 * 1000);
+      landed = RegionEquals(element, regionStart_, finalRegion);
+    }
+    if (!landed) {
+      CFRelease(element);
+      reason_ = "verify-failed";
+      return;
+    }
+
+    if (parkAt_ >= 0 && caretIsOurs) {
+      CFRange park = CFRangeMake(parkAt_, 0);
+      AXValueRef parkValue = AXValueCreate(kAXValueTypeCFRange, &park);
+      if (parkValue) {
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute, parkValue);
+        CFRelease(parkValue);
+        parked_ = true;
+      }
+    }
+    ok_ = true;
+    CFRelease(element);
+  }
+
+  void OnOK() override {
+    Napi::Env env = Env();
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("ok", Napi::Boolean::New(env, ok_));
+    result.Set("reason",
+               reason_.empty() ? env.Null() : Napi::String::New(env, reason_).As<Napi::Value>());
+    result.Set("parked", Napi::Boolean::New(env, parked_));
+    deferred_.Resolve(result);
+  }
+
+ private:
+  std::string token_;
+  CFIndex regionStart_;
+  std::u16string expected_;
+  CFIndex editStart_;
+  CFIndex editEnd_;
+  std::u16string replacement_;
+  CFIndex parkAt_;
+  CFIndex expectedCaret_;
+  double timeoutMs_;
+  bool ok_ = false;
+  bool parked_ = false;
+  std::string reason_;
+};
+
+/**
  * Sets the element's selection range — the aiming half of a precise range edit: select
  * [start, start+length), then replace the selection. Reports the range read back in the same
  * trip so TypeScript can tell a landed placement from the silent no-op refusal some views
@@ -887,6 +1123,29 @@ Napi::Value SetValue(const Napi::CallbackInfo& info) {
   return worker->Promise();
 }
 
+Napi::Value CasRangeEdit(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number, ArgKind::String, ArgKind::Number,
+                        ArgKind::Number, ArgKind::String, ArgKind::Number, ArgKind::Number,
+                        ArgKind::Number})) {
+    return RejectBadArgs(env,
+                         "casRangeEdit(token, regionStart, expected, editStart, editEnd, "
+                         "replacement, parkAt, expectedCaret, timeoutMs)");
+  }
+  auto* worker = new CasRangeEditWorker(
+      env, info[0].As<Napi::String>().Utf8Value(),
+      static_cast<CFIndex>(info[1].As<Napi::Number>().Int64Value()),
+      info[2].As<Napi::String>().Utf16Value(),
+      static_cast<CFIndex>(info[3].As<Napi::Number>().Int64Value()),
+      static_cast<CFIndex>(info[4].As<Napi::Number>().Int64Value()),
+      info[5].As<Napi::String>().Utf16Value(),
+      static_cast<CFIndex>(info[6].As<Napi::Number>().Int64Value()),
+      static_cast<CFIndex>(info[7].As<Napi::Number>().Int64Value()),
+      info[8].As<Napi::Number>().DoubleValue());
+  worker->Queue();
+  return worker->Promise();
+}
+
 Napi::Value SetSelectedTextRange(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (!ArgsMatch(info, {ArgKind::String, ArgKind::Number, ArgKind::Number, ArgKind::Number})) {
@@ -1173,6 +1432,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("verifyElement", Napi::Function::New(env, VerifyElement));
   exports.Set("setSelectedText", Napi::Function::New(env, SetSelectedText));
   exports.Set("setSelectedTextRange", Napi::Function::New(env, SetSelectedTextRange));
+  exports.Set("casRangeEdit", Napi::Function::New(env, CasRangeEdit));
   exports.Set("setValue", Napi::Function::New(env, SetValue));
   exports.Set("postPaste", Napi::Function::New(env, PostPaste));
   exports.Set("postReturn", Napi::Function::New(env, PostReturn));

@@ -16,8 +16,8 @@ const outcome = await insertText('Hello from the outside.')
 // { delivered: false, reason: 'not-insertable', capture: { status: 'secure-field', … } }
 ```
 
-And the part nothing else open-source does — **streaming text that revises itself**, at 2–7ms
-per revision:
+And the part nothing else open-source does — **streaming text that revises itself**, at a
+measured **0.9ms median** per revision:
 
 ```ts
 using captured = await captureFocusedField()      // pin the field the user is in
@@ -258,10 +258,19 @@ await draft.update('')                         //  region empties, stays owned
 
 Three properties make this the fast path:
 
-- **Diff-minimal edits.** Each `update` computes the smallest changed span (surrogate-safe) and
-  replaces only that: select `[start, end)` → write the replacement. Revising one word of a
-  paragraph is one tiny write. Measured against a live AppKit app: **2–7ms per update** —
-  streaming partials cost effectively nothing.
+- **Diff-minimal edits, one native trip.** Each `update` computes the smallest changed span
+  (surrogate-safe) and hands it to a single fused native transaction — a compare-and-swap on
+  the text region: prove focus → compare the region → replace the span → verify → park the
+  caret, atomically, without recrossing the JS boundary between steps. Verification reads only
+  the region (`AXStringForRange`), so cost is **O(edit), never O(document)**. Benchmarked in
+  the E2E suite against a live AppKit app: **p50 0.9ms** per update on a growing field, and a
+  flat **~7–8ms** streaming after a 10,000-character document.
+- **No wasted checks.** The hot path deliberately drops two guards the one-shot insert keeps:
+  the frontmost check (an Accessibility write lands on the element it *references* — unlike
+  synthetic events there is no misdirection to prevent, and dictation that pauses because the
+  user glanced at another window would be a bug) and the identity re-read (the region content
+  precondition is strictly stronger). What remains is the strongest check available: CFEqual
+  against the app's live focused element, plus the content compare-and-swap.
 - **Verified, like everything else.** Every update first re-proves the world (same app, same
   element) and then checks the region still holds *exactly what the draft last wrote*. If the
   user edited it, `update` refuses with `'draft-drifted'` — their keystrokes outrank your

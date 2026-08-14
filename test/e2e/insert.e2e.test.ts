@@ -317,6 +317,58 @@ describe.skipIf(!runnable).sequential('end-to-end against a live AppKit host', (
     console.log(`draft update latency per partial (ms): ${timings.join(', ')}`)
   }, 30_000)
 
+  it('benchmarks draft updates: p50/p95, small field and 10k-char document', async () => {
+    const pid = await startHost('textview')
+    using captured = await captureHostField(pid)
+    const started = await captured.startDraft()
+    if (!started.ok) throw new Error(`draft refused: ${started.reason}`)
+    const draft = started.draft
+
+    // Realistic streaming: the text grows a word at a time, with occasional mid-text
+    // revisions, exactly the shape a live transcriber produces.
+    const words = 'the quick brown fox jumps over the lazy dog again and again'.split(' ')
+    const timings: number[] = []
+    let text = ''
+    for (const [index, word] of words.entries()) {
+      text =
+        index % 4 === 3 ? `${text.slice(0, -word.length)}${word.toUpperCase()} ` : `${text}${word} `
+      const startedAt = performance.now()
+      const result = await draft.update(text)
+      timings.push(performance.now() - startedAt)
+      expect(result).toEqual({ delivered: true })
+    }
+
+    // The O(edit) claim: seed a 10k-character document, then stream AFTER it — per-update cost
+    // must stay flat, not scale with the document.
+    await captured.insert('all '.repeat(2500), { mode: 'all' })
+    const seeded = await captured.reread()
+    expect(seeded?.value.length).toBe(10_000)
+    const tail = await captured.startDraft()
+    if (!tail.ok) throw new Error(`tail draft refused: ${tail.reason}`)
+    const bigDocTimings: number[] = []
+    let tailText = ''
+    for (const word of ['and', 'and then', 'and then some']) {
+      tailText = word
+      const startedAt = performance.now()
+      expect(await tail.draft.update(tailText)).toEqual({ delivered: true })
+      bigDocTimings.push(performance.now() - startedAt)
+    }
+
+    const stats = (samples: number[]) => {
+      const sorted = [...samples].sort((a, b) => a - b)
+      const at = (q: number) =>
+        sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0
+      return `p50=${at(0.5).toFixed(1)}ms p95=${at(0.95).toFixed(1)}ms max=${Math.max(...samples).toFixed(1)}ms n=${samples.length}`
+    }
+    console.log(`draft bench, empty field : ${stats(timings)}`)
+    console.log(`draft bench, 10k-char doc: ${stats(bigDocTimings)}`)
+
+    // Loose ceilings — this guards against order-of-magnitude regressions, not scheduler noise.
+    const p95 = [...timings].sort((a, b) => a - b)[Math.floor(0.95 * timings.length)] ?? 0
+    expect(p95).toBeLessThan(100)
+    expect(Math.max(...bigDocTimings)).toBeLessThan(100)
+  }, 60_000)
+
   it('refuses a drifted draft instead of overwriting what the user typed', async () => {
     const pid = await startHost('textview')
     using captured = await captureHostField(pid)

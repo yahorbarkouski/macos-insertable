@@ -85,7 +85,11 @@ describe('minimalEdit', () => {
   })
 })
 
-/** A field whose value the fake tracks, so range edits behave like a real text view. */
+/**
+ * A field whose value the fake tracks, implementing the fused compare-and-swap the way the
+ * native side does — region compare, splice, conditional caret park — so draft behavior is
+ * exercised against the real contract.
+ */
 function liveFieldBridge(initial: string, caret: number, selectionLength = 0): NativeBridge {
   let value = initial
   let selStart = caret
@@ -101,17 +105,33 @@ function liveFieldBridge(initial: string, caret: number, selectionLength = 0): N
   return fakeBridge({
     readFocusedElement: vi.fn(async () => element({ ...state() })),
     readElementState: vi.fn(async () => state()),
-    setSelectedTextRange: vi.fn(async (_token: string, start: number, length: number) => {
-      selStart = start
-      selLength = length
-      return { ok: true, error: null, selectionStart: start, selectionLength: length }
-    }),
-    setSelectedText: vi.fn(async (_token: string, text: string) => {
-      value = value.slice(0, selStart) + text + value.slice(selStart + selLength)
-      selStart += text.length
-      selLength = 0
-      return { ok: true, error: null, after: state() }
-    })
+    casRangeEdit: vi.fn(
+      async (
+        _token: string,
+        regionStart: number,
+        expected: string,
+        editStart: number,
+        editEnd: number,
+        replacement: string,
+        parkAt: number,
+        expectedCaret: number
+      ) => {
+        if (value.slice(regionStart, regionStart + expected.length) !== expected) {
+          return { ok: false, reason: 'region-mismatch', parked: false }
+        }
+        const caretIsOurs = expectedCaret < 0 || (selLength === 0 && selStart === expectedCaret)
+        value =
+          value.slice(0, regionStart + editStart) + replacement + value.slice(regionStart + editEnd)
+        selStart = regionStart + editStart + replacement.length
+        selLength = 0
+        let parked = false
+        if (parkAt >= 0 && caretIsOurs) {
+          selStart = parkAt
+          parked = true
+        }
+        return { ok: true, reason: null, parked }
+      }
+    )
   })
 }
 
@@ -185,8 +205,8 @@ describe('Draft.update — the streaming transcription flow', () => {
     await draft.update('hello')
     await draft.update('hello world')
 
-    // The second update selected the empty tail [5,5) and wrote only " world".
-    expect(vi.mocked(bridge.setSelectedText).mock.calls.map((call) => call[1])).toEqual([
+    // The second trip carried only " world" as its replacement span.
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls.map((call) => call[5])).toEqual([
       'hello',
       ' world'
     ])
@@ -201,7 +221,28 @@ describe('Draft.update — the streaming transcription flow', () => {
     const final = await bridge.readElementState('ax-1', 0, 1000)
     expect(final?.value).toBe("they're going home now")
     // Only the changed span travelled.
-    expect(vi.mocked(bridge.setSelectedText).mock.calls.at(-1)?.[1]).toBe("y're")
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls.at(-1)?.[5]).toBe("y're")
+  })
+
+  it('spends exactly one native trip per update', async () => {
+    const bridge = liveFieldBridge('', 0)
+    const draft = await draftOn(bridge)
+    // startDraft's one-time setup traffic ends here; the hot path begins.
+    const verifies = vi.mocked(bridge.verifyElement).mock.calls.length
+    const frontmosts = vi.mocked(bridge.frontmostApp).mock.calls.length
+    const reads = vi.mocked(bridge.readElementState).mock.calls.length
+
+    await draft.update('hello')
+    await draft.update('hello world')
+    await draft.update('hello world')
+
+    // Two real edits, one no-op — and no other bridge traffic at all: the fused trip IS the
+    // update.
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls.length).toBe(2)
+    expect(vi.mocked(bridge.verifyElement).mock.calls.length).toBe(verifies)
+    expect(vi.mocked(bridge.frontmostApp).mock.calls.length).toBe(frontmosts)
+    expect(vi.mocked(bridge.readElementState).mock.calls.length).toBe(reads)
+    expect(bridge.setSelectedText).not.toHaveBeenCalled()
   })
 
   it('replaces the selection the draft was started over', async () => {
@@ -227,24 +268,43 @@ describe('Draft.update — the streaming transcription flow', () => {
     expect((await bridge.readElementState('ax-1', 0, 1000))?.value).toBe('keep the real sentence')
   })
 
-  it('equal text is a free no-op — no writes at all', async () => {
+  it('equal text is a free no-op — no native trip at all', async () => {
     const bridge = liveFieldBridge('', 0)
     const draft = await draftOn(bridge)
     await draft.update('same')
-    const writes = vi.mocked(bridge.setSelectedText).mock.calls.length
+    const trips = vi.mocked(bridge.casRangeEdit).mock.calls.length
     expect(await draft.update('same')).toEqual({ delivered: true })
-    expect(vi.mocked(bridge.setSelectedText).mock.calls.length).toBe(writes)
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls.length).toBe(trips)
   })
 
-  it('parks the caret at the end of the draft after every update', async () => {
+  it('asks each trip to park the caret at the end of the draft', async () => {
     const bridge = liveFieldBridge('', 0)
     const draft = await draftOn(bridge)
     await draft.update('their home')
     await draft.update('they home')
-    // Last range call is the caret park at the draft's end, not the edit aim.
-    const lastRange = vi.mocked(bridge.setSelectedTextRange).mock.calls.at(-1)
-    expect(lastRange?.[1]).toBe(9)
-    expect(lastRange?.[2]).toBe(0)
+    // parkAt rides the fused trip; the second one also names where the first left the caret.
+    const calls = vi.mocked(bridge.casRangeEdit).mock.calls
+    expect(calls[0]?.[6]).toBe(10) // park at end of "their home"
+    expect(calls[0]?.[7]).toBe(-1) // first write: caret unconditionally ours
+    expect(calls[1]?.[6]).toBe(9)
+    expect(calls[1]?.[7]).toBe(10) // must still be where the first update parked it
+  })
+
+  it('stops parking once the user moves the caret away', async () => {
+    const bridge = liveFieldBridge('', 0)
+    const draft = await draftOn(bridge)
+    await draft.update('hello')
+    // The fake reports the park was skipped — the live caret was not where we left it.
+    vi.mocked(bridge.casRangeEdit).mockResolvedValueOnce({
+      ok: true,
+      reason: null,
+      parked: false
+    })
+    await draft.update('hello there')
+    await draft.update('hello there friend')
+    // expectedCaret stays at the LAST position we parked, so parking resumes only if the user
+    // returns the caret there.
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls.at(-1)?.[7]).toBe(5)
   })
 })
 
@@ -254,42 +314,59 @@ describe('Draft.update — refusals', () => {
     const draft = await draftOn(bridge)
     await draft.update('hello world')
 
-    // The user backspaces over our text between updates:
-    vi.mocked(bridge.readElementState).mockResolvedValue(
-      textState({ value: 'hello wor', selectionStart: 9, selectionLength: 0 })
-    )
+    // The user backspaced over our text between updates; the region compare fails natively.
+    vi.mocked(bridge.casRangeEdit).mockResolvedValue({
+      ok: false,
+      reason: 'region-mismatch',
+      parked: false
+    })
     expect(await draft.update('hello world again')).toEqual({
       delivered: false,
       reason: 'draft-drifted'
     })
   })
 
-  it('refuses when the user switched applications mid-stream', async () => {
+  it('keeps streaming when the app is merely backgrounded — the region check is the guard', async () => {
+    // An Accessibility write lands on the element it references; there is no misdirection for
+    // a frontmost check to prevent, and pausing dictation because the user glanced at another
+    // window would be a bug, not a safety feature.
     const bridge = liveFieldBridge('', 0)
     const draft = await draftOn(bridge)
     vi.mocked(bridge.frontmostApp).mockReturnValue({ pid: 1, bundleId: 'other', name: 'Other' })
-    expect(await draft.update('x')).toEqual({ delivered: false, reason: 'app-changed' })
+    expect(await draft.update('still streaming')).toEqual({ delivered: true })
+  })
+
+  it('refuses when focus moved to a different element', async () => {
+    const bridge = liveFieldBridge('', 0)
+    const draft = await draftOn(bridge)
+    vi.mocked(bridge.casRangeEdit).mockResolvedValue({
+      ok: false,
+      reason: 'element-changed',
+      parked: false
+    })
+    expect(await draft.update('x')).toEqual({ delivered: false, reason: 'element-changed' })
   })
 
   it('refuses when the range could not be aimed where asked', async () => {
     const bridge = liveFieldBridge('', 0)
     const draft = await draftOn(bridge)
-    vi.mocked(bridge.setSelectedTextRange).mockResolvedValue({
-      ok: true,
-      error: null,
-      // The view answered with a different selection than requested — writing now would land
-      // the replacement somewhere else.
-      selectionStart: 3,
-      selectionLength: 2
+    vi.mocked(bridge.casRangeEdit).mockResolvedValue({
+      ok: false,
+      reason: 'select-failed',
+      parked: false
     })
-    expect(await draft.update('hello')).toMatchObject({ delivered: false })
+    expect(await draft.update('hello')).toEqual({
+      delivered: false,
+      reason: 'range-write-failed'
+    })
   })
 
-  it('refuses under secure input', async () => {
+  it('refuses under secure input without a native trip', async () => {
     const bridge = liveFieldBridge('', 0)
     const draft = await draftOn(bridge)
     vi.mocked(bridge.isSecureInputEnabled).mockReturnValue(true)
     expect(await draft.update('x')).toEqual({ delivered: false, reason: 'secure-input' })
+    expect(bridge.casRangeEdit).not.toHaveBeenCalled()
   })
 })
 

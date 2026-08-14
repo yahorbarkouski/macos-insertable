@@ -157,10 +157,7 @@ export class CapturedField {
     }
     const anchor = state.selectionStart
     const initial = state.value.slice(anchor, anchor + state.selectionLength)
-    return {
-      ok: true,
-      draft: new Draft(bridge, this.#token, this.app, this.#field.identity, anchor, initial)
-    }
+    return { ok: true, draft: new Draft(bridge, this.#token, anchor, initial) }
   }
 
   /**

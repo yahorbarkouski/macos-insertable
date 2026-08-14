@@ -66,6 +66,16 @@ export interface RawSelectionResult {
   selectionLength: number | null
 }
 
+export interface RawCasResult {
+  ok: boolean
+  /** 'element-gone' | 'element-changed' | 'region-mismatch' | 'select-failed' |
+   *  'write-failed' | 'verify-failed', or null on success. */
+  reason: string | null
+  /** Whether the caret was parked — false also when the user had moved it, which skips the
+   *  park on purpose. */
+  parked: boolean
+}
+
 /** Chat-style applications disagree on the send chord; the modifier is the caller's choice. */
 export type SubmitModifier = 'none' | 'shift' | 'command'
 
@@ -108,6 +118,26 @@ export interface NativeBridge {
     length: number,
     timeoutMs: number
   ): Promise<RawSelectionResult>
+  /**
+   * Compare-and-swap on a text region, fused into one native trip: prove the element is still
+   * its app's focused element, compare [regionStart, regionStart+expected.length) against
+   * `expected`, replace the [editStart, editEnd) span of it (offsets relative to the region)
+   * with `replacement`, verify the result over the region only (O(edit), never O(document)),
+   * and park the caret at `parkAt` unless the live caret is not at `expectedCaret` — a caret
+   * the user moved is not ours to move back. Negative parkAt skips parking; negative
+   * expectedCaret parks unconditionally. All offsets are UTF-16 units.
+   */
+  casRangeEdit(
+    token: string,
+    regionStart: number,
+    expected: string,
+    editStart: number,
+    editEnd: number,
+    replacement: string,
+    parkAt: number,
+    expectedCaret: number,
+    timeoutMs: number
+  ): Promise<RawCasResult>
   setValue(
     token: string,
     text: string,
