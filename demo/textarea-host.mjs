@@ -19,6 +19,9 @@ const mode = process.argv[3] ?? 'textarea'
 const pages = {
   textarea:
     '<textarea id="t" autofocus style="width:480px;height:240px;font:14px monospace"></textarea>',
+  staticfocus:
+    '<div id="t" tabindex="0" style="width:480px;height:240px;font:14px monospace">just some readable text, focusable but not editable</div>' +
+    '<script>document.getElementById("t").focus()</script>',
   placeholder:
     '<div id="t" contenteditable="true" aria-placeholder="Ask anything…" ' +
     'style="width:480px;height:240px;font:14px monospace;border:1px solid gray">Ask anything…</div>' +

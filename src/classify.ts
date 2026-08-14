@@ -24,6 +24,16 @@ const TEXT_ROLES: Record<string, FieldKind> = {
   AXSearchField: 'field'
 }
 
+/**
+ * Subroles that name a text editor even when the role does not. Catalyst apps focus their
+ * search fields as role AXStaticText with subrole AXSearchField (measured: WhatsApp — live
+ * value, working caret, nothing settable but the selection range); the subrole is where the
+ * truth went.
+ */
+const TEXT_SUBROLES: Record<string, FieldKind> = {
+  AXSearchField: 'field'
+}
+
 const TEXT_CONTENT_ATTRIBUTES = ['AXValue', 'AXSelectedText']
 
 /** A caret is what separates an editor from a label; labels expose text but never an insertion
@@ -88,6 +98,8 @@ export function hasTextCapability(element: RawFocusedElement): boolean {
 function fieldKindFor(element: RawFocusedElement): FieldKind | null {
   const byRole = TEXT_ROLES[element.role]
   if (byRole) return byRole
+  const bySubrole = TEXT_SUBROLES[element.subrole]
+  if (bySubrole) return bySubrole
   if (!hasTextCapability(element)) return null
   // Single-line controls are exactly the ones that do use the standard roles.
   return 'container'
