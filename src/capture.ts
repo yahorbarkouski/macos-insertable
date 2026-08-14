@@ -7,7 +7,7 @@
 
 import { loadBridge } from './addon.js'
 import type { AppIdentity, NativeBridge, ScreenRect, SubmitModifier } from './bridge.js'
-import { buildIdentity, classify } from './classify.js'
+import { buildIdentity, classify, isPlaceholderPhantom } from './classify.js'
 import { Draft } from './draft.js'
 import { insertInto } from './insert.js'
 import { waitForModifiersReleased } from './modifiers.js'
@@ -85,6 +85,8 @@ export class CapturedField {
   #timeoutMs: number
   #released = false
   #field: FieldInfo
+  /** The element's declared placeholder at capture, for phantom-value detection in live reads. */
+  #placeholder: string
 
   public readonly app: AppIdentity
 
@@ -93,13 +95,15 @@ export class CapturedField {
     token: string,
     app: AppIdentity,
     field: FieldInfo,
-    timeoutMs: number
+    timeoutMs: number,
+    placeholder = ''
   ) {
     this.#bridge = bridge
     this.#token = token
     this.app = app
     this.#field = field
     this.#timeoutMs = timeoutMs
+    this.#placeholder = placeholder
   }
 
   /** The field as last read — at capture, or by the most recent successful {@link reread}. */
@@ -189,6 +193,13 @@ export class CapturedField {
       .catch(() => null)
     if (!state?.hasValue || state.selectionStart === null || state.selectionLength === null) {
       return { ok: false, reason: 'no-caret' }
+    }
+    // A value that is really the rendered placeholder means the field is semantically EMPTY,
+    // and the reported caret is an offset into decoration. Anchoring there would make every
+    // later write treat the phantom as content and materialize it; the draft starts at zero
+    // over nothing instead.
+    if (isPlaceholderPhantom(state.value, this.#placeholder)) {
+      return { ok: true, draft: new Draft(bridge, this.#token, 0, '') }
     }
     const anchor = state.selectionStart
     const initial = state.value.slice(anchor, anchor + state.selectionLength)
@@ -323,7 +334,7 @@ export async function captureFocusedField(options: CaptureOptions = {}): Promise
     return { ...verdict, app }
   }
 
-  return new CapturedField(bridge, element.token, app, verdict.field, timeoutMs)
+  return new CapturedField(bridge, element.token, app, verdict.field, timeoutMs, element.placeholder)
 }
 
 /**
