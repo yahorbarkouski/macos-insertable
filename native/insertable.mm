@@ -1602,12 +1602,23 @@ Napi::Value CasRangeEdit(const Napi::CallbackInfo& info) {
                          "casRangeEdit(token, regionStart, expected, editStart, editEnd, "
                          "replacement, parkAt, expectedCaret, preferSplice, timeoutMs)");
   }
+
+  // The edit offsets index into `expected` and are spliced with substr, where an inverted or
+  // out-of-bounds range reads past the end of the string rather than failing an edit. Checking
+  // before the worker is queued keeps that unreachable: a caller whose diff went wrong gets a
+  // TypeError naming the constraint, not a worker operating on memory it was never given.
+  const CFIndex regionStart = static_cast<CFIndex>(info[1].As<Napi::Number>().Int64Value());
+  const std::u16string expectedRegion = info[2].As<Napi::String>().Utf16Value();
+  const CFIndex editStart = static_cast<CFIndex>(info[3].As<Napi::Number>().Int64Value());
+  const CFIndex editEnd = static_cast<CFIndex>(info[4].As<Napi::Number>().Int64Value());
+  if (regionStart < 0 || editStart < 0 || editEnd < editStart ||
+      static_cast<size_t>(editEnd) > expectedRegion.size()) {
+    return RejectBadArgs(
+        env, "casRangeEdit: needs 0 <= editStart <= editEnd <= expected.length, regionStart >= 0");
+  }
+
   auto* worker = new CasRangeEditWorker(
-      env, info[0].As<Napi::String>().Utf8Value(),
-      static_cast<CFIndex>(info[1].As<Napi::Number>().Int64Value()),
-      info[2].As<Napi::String>().Utf16Value(),
-      static_cast<CFIndex>(info[3].As<Napi::Number>().Int64Value()),
-      static_cast<CFIndex>(info[4].As<Napi::Number>().Int64Value()),
+      env, info[0].As<Napi::String>().Utf8Value(), regionStart, expectedRegion, editStart, editEnd,
       info[5].As<Napi::String>().Utf16Value(),
       static_cast<CFIndex>(info[6].As<Napi::Number>().Int64Value()),
       static_cast<CFIndex>(info[7].As<Napi::Number>().Int64Value()),
