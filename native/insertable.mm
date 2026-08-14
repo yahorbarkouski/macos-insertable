@@ -929,8 +929,10 @@ class CasRangeEditWorker : public PromiseWorker {
     // Rich composers render their placeholder as literal text in the accessibility value while
     // the field is empty. Preserving that as "surrounding text" would MATERIALIZE the
     // placeholder into the document — the app's own input path clears it, a raw value write
-    // does not. When the whole value equals the element's declared placeholder, the real
-    // content is empty and the splice starts from empty.
+    // does not. Exact equality is not enough (composers keep a trailing newline or zero-width
+    // artifact after the rendered placeholder), so the check is placeholder-prefix plus a
+    // short junk-only tail — mirroring isPlaceholderPhantom on the TypeScript side; the two
+    // must agree or the layers disagree about whether content exists.
     CFTypeRef placeholderRef = NULL;
     bool valueIsPlaceholder = false;
     if (CFStringGetLength(value) > 0 &&
@@ -938,9 +940,21 @@ class CasRangeEditWorker : public PromiseWorker {
             kAXErrorSuccess &&
         placeholderRef) {
       if (CFGetTypeID(placeholderRef) == CFStringGetTypeID()) {
-        valueIsPlaceholder =
-            CFStringCompare(value, static_cast<CFStringRef>(placeholderRef), 0) ==
-            kCFCompareEqualTo;
+        CFStringRef placeholder = static_cast<CFStringRef>(placeholderRef);
+        CFIndex placeholderLength = CFStringGetLength(placeholder);
+        CFIndex valueLength = CFStringGetLength(value);
+        if (placeholderLength > 0 && valueLength >= placeholderLength &&
+            valueLength <= placeholderLength + 2 &&
+            CFStringHasPrefix(value, placeholder)) {
+          bool tailIsJunk = true;
+          for (CFIndex i = placeholderLength; i < valueLength && tailIsJunk; i += 1) {
+            UniChar unit = CFStringGetCharacterAtIndex(value, i);
+            tailIsJunk = unit == u'\n' || unit == u'\r' || unit == u' ' || unit == u'\t' ||
+                         unit == 0x200B || unit == 0x200C || unit == 0xFEFF || unit == 0x2060 ||
+                         unit == 0xFFFC;
+          }
+          valueIsPlaceholder = tailIsJunk;
+        }
       }
       CFRelease(placeholderRef);
     }
