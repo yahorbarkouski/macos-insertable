@@ -12,8 +12,20 @@ import { insertText } from 'macos-insertable'
 
 const outcome = await insertText('Hello from the outside.')
 // { delivered: true, via: 'accessibility' }
-// or: { delivered: false, reason: 'secure-input' }
-// or: { delivered: false, reason: 'not-insertable', capture: { status: 'secure-field', … } }
+// { delivered: false, reason: 'secure-input' }
+// { delivered: false, reason: 'not-insertable', capture: { status: 'secure-field', … } }
+```
+
+## The API in one glance
+
+Four functions, ordered by how involved you want to be. Every answer is a discriminated union —
+you `switch` on it, and the compiler makes sure you handled every case.
+
+```
+checkAccess()            am I even allowed to play?
+readFocusedField()       what is focused right now?          (look, don't touch)
+insertText(text)         put this where the user is typing   (one-shot)
+captureFocusedField()    pin the field now, insert later     (the dictation pattern)
 ```
 
 ## Why this exists
@@ -27,21 +39,17 @@ This library takes the opposite contract:
 
 - **Detection over guessing.** An element is a text field because of what it *advertises*
   (text content + an insertion point), not because its role is on a list. Rich editors routinely
-  focus an `AXGroup` container that matches no text role — a role allowlist rejects all of them.
+  focus an `AXGroup` container that matches no text role — ChatGPT's composer is one — and a
+  role allowlist rejects all of them.
 - **Capture now, deliver later.** The focused element is pinned at capture (a live reference
-  inside the target app) and re-proven before every write — same process frontmost, same live
-  element object, same identity fingerprint. Focus moved on? The insert **refuses with a typed
-  reason** instead of writing into the wrong field.
+  inside the target app) and re-proven before every write. Focus moved on? The insert **refuses
+  with a typed reason** instead of writing into the wrong field.
 - **Verified writes.** The Accessibility API's dominant failure mode is the silent no-op that
-  reports success. Every precise write is read back (with a settle loop for apps that mirror
-  their text asynchronously) before it is reported delivered.
+  reports success. Every precise write is read back before it is reported delivered.
 - **The clipboard is borrowed, never taken.** Snapshotted natively before, restored after —
-  unless the user copied something of their own meanwhile, in which case theirs wins. Written
-  text carries [nspasteboard.org](http://nspasteboard.org) concealment markers so clipboard
-  managers don't archive it.
-- **Passwords are out of scope, structurally.** A secure field's text never reaches the JS heap
-  (withheld in native code), it classifies as its own status, and no insertion will ever be
-  attempted against one. Delivery also refuses while Secure Event Input is active anywhere.
+  unless the user copied something of their own meanwhile, in which case theirs wins.
+- **Passwords are out of scope, structurally.** A secure field's text never reaches the JS
+  heap, and no insertion will ever be attempted against one.
 
 ## Install
 
@@ -54,75 +62,170 @@ package installs as an inert dependency and reports `{ status: 'unsupported' }` 
 apps can depend on it unconditionally.
 
 Every read and write requires the **Accessibility permission** (System Settings → Privacy &
-Security → Accessibility) for the process using the library. `checkAccess()` reports the state;
-`npx macos-insertable doctor` checks it from the terminal.
+Security → Accessibility) for the process using the library.
 
-## API
+```bash
+npx macos-insertable doctor     # check permission and platform state
+npx macos-insertable watch 30   # click around your apps, watch verdicts stream live
+```
 
-### `checkAccess(): Access`
+## `checkAccess()` — the bouncer
 
-`{ supported, trusted, secureInput }` — answered without touching any other process.
+Synchronous, touches nothing outside your process. Call it at startup and whenever you want to
+explain to the user why nothing is happening.
 
-### `readFocusedField(options?): Promise<Capture>`
+```ts
+const { supported, trusted, secureInput } = checkAccess()
 
-What is focused right now, and is it insertable? Pure data out, nothing to release:
+if (!supported)  // not macOS, or addon not built — library is inert, your app still runs
+if (!trusted)    // user hasn't granted Accessibility → send them to System Settings
+if (secureInput) // a password field is open SOMEWHERE on the system — delivery will refuse
+```
+
+The `secureInput` flag is the one people don't expect: while any app has a password field up,
+macOS suppresses synthetic input system-wide. Knowing this *before* the user dictates a
+paragraph is the difference between "please close the password prompt" and a mystery failure.
+
+## `readFocusedField()` — the question this library exists to answer
+
+*"Is the thing under the user's cursor insertable?"* Pure data out, nothing to release.
 
 ```ts
 const capture = await readFocusedField()
+
 switch (capture.status) {
-  case 'field':         // capture.field: kind, surface, label, value, selection, readOnly…
-  case 'secure-field':  // a password/OTP field — never captured, never written to
-  case 'disabled':
-  case 'not-a-field':   // something focused, but not a place text goes (role reported)
-  case 'no-element':    // app reports nothing focused (common: Chromium apps without an AX tree)
-  case 'no-permission':
-  case 'unsupported':
+  case 'field':         // yes — details in capture.field
+  case 'secure-field':  // a password box. You will never get its text. By design.
+  case 'not-a-field':   // something IS focused — a button, a list — role/subrole say what
+  case 'disabled':      // a text field, but greyed out
+  case 'no-element':    // app reports nothing focused (classic: Electron app without an AX tree)
+  case 'no-permission': // the Accessibility grant is missing
+  case 'unsupported':   // not macOS
 }
 ```
 
-`capture.field.surface` tells you how insertion will work: `readable` (precise, verified
-Accessibility writes) or `opaque` (aimed trusted input — canvas/model-backed editors).
-
-### `captureFocusedField(options?): Promise<CaptureResult>`
-
-The dictation pattern: pin the field **now**, deliver **later** — after transcription, a network
-round trip, a user pause. The `field` arm is a live handle:
+When it *is* a field, the payload tells you everything routing needs. User in Slack's message
+box with `hello world` typed and `world` selected:
 
 ```ts
-using captured = await captureFocusedField()   // Symbol.dispose releases the native reference
-if (captured.status === 'field') {
-  // …seconds pass, the user may click around…
-  const fresh = await captured.reread()        // null ⇒ the world moved on; recapture
-  const result = await captured.insert(transcript, { mode: 'caret' })
+{
+  status: 'field',
+  app:   { pid: 4242, bundleId: 'com.tinyspeck.slackmacgap', name: 'Slack' },
+  field: {
+    kind: 'area',            // 'field' (one line) | 'area' | 'container' (rich editor)
+    surface: 'readable',     // ← the important one, see below
+    label: 'Message #general',
+    purposeHint: '',         // 'search' | 'url' | 'email' when the platform says so
+    multiline: true,
+    value: 'hello world',
+    selectionStart: 6, selectionEnd: 11, selectedText: 'world',
+    readOnly: false,
+  }
 }
 ```
 
-`insert(text, { mode, strategy })`:
+**`surface` is the one field to internalize.** It's how the element holds its text, and it
+decides everything downstream:
 
-- `mode`: `'caret'` (default) | `'selection'` | `'all'`. `all` is only ever delivered through
-  the verified Accessibility write — replacing a document that can't be read back is
-  destruction, not an edit, and is refused.
-- `strategy`: `'auto'` (default: accessibility → clipboard → keystrokes) | `'clipboard'` |
-  `'keystrokes'` for callers with their own knowledge of the target.
+- **`readable`** — the app exposes the text and a writable selection. You can read it (build a
+  prompt around it, transform it), and inserts are *precise and verified*: written through
+  Accessibility, then read back to prove they landed.
+- **`opaque`** — the element behaves like an editor but its text lives somewhere you can't see
+  (Google Docs' canvas, Monaco's hidden textarea). `value` is deliberately empty — the library
+  refuses to present decoy scratch text as if it were the document. Inserts still work, via
+  aimed paste or keystrokes, but can't be read back.
 
-Every failure is a typed `InsertRefusal` — `'app-changed'`, `'element-changed'`,
-`'secure-input'`, `'read-only'`, `'paste-did-not-land'`, … — because "it did nothing" is the
-whole bug report otherwise.
+`kind: 'container'` exists because detection is by *capability*, not role name: an element that
+advertises text content and a caret is an editor no matter what the application calls it.
 
-### `insertText(text, options?): Promise<InsertTextOutcome>`
+## `insertText(text, options?)` — the 90% case
 
-The one-call form: capture the frontmost app's field, insert, release. When nothing insertable
-is focused, the capture verdict rides along so you can explain *why*.
+Capture the frontmost app's field, insert, release — one call. For "user pressed the hotkey,
+put the transcript wherever they are."
 
-## CLI
+```ts
+const outcome = await insertText('On my way, 10 minutes.')
 
-```bash
-npx macos-insertable doctor        # permission and platform state
-npx macos-insertable watch 30      # follow the frontmost app; click into fields to test them
-npx macos-insertable sweep         # one pass over running apps (their remembered focus)
+if (outcome.delivered) {
+  outcome.via  // 'accessibility' | 'clipboard' | 'keystrokes' — which rung landed it
+} else if (outcome.reason === 'not-insertable') {
+  outcome.capture.status  // 'secure-field'? Say you don't type into password boxes.
+                          // 'no-element'? "Click into a text field first."
+} else {
+  outcome.reason  // a delivery refusal — see the table below
+}
 ```
 
-Metadata only — roles, kinds, labels, lengths. Field content never leaves the process.
+`via` matters for product decisions: `'accessibility'` means the write was **verified by
+read-back**; `'clipboard'` and `'keystrokes'` mean it was aimed correctly but the target cannot
+confirm receipt. Show a softer checkmark for those if you care.
+
+## `captureFocusedField()` — the dictation pattern
+
+The problem in one sentence: **the user focuses a field, talks for eight seconds, and by
+delivery time focus may be anywhere.** Clipboard-paste tools type into whatever won focus. This
+API pins the actual element at hotkey-down:
+
+```ts
+// t=0 — hotkey down. Pin the element (a live reference INSIDE the target app):
+using captured = await captureFocusedField()   // `using` auto-releases at scope end
+if (captured.status !== 'field') return answerInChatInstead(captured)
+
+// t=0…8s — record, transcribe, call your LLM. User may alt-tab, click around, come back.
+
+// t=8s — deliver. The library re-proves the target first: same app frontmost,
+// same LIVE element object (not a lookalike), same identity fingerprint.
+const result = await captured.insert(transcript, { mode: 'caret' })
+
+if (!result.delivered && result.reason === 'element-changed') {
+  // Focus moved to a different field. The text did NOT go into the wrong one.
+  // That refusal — not the happy path — is the feature.
+}
+```
+
+Two more tools on the handle:
+
+```ts
+// Re-read the field only after proving it's still the same element.
+// null ⇒ the world moved on (app switched, focus left) — recapture, don't guess.
+const fresh = await captured.reread()
+
+// No `using`? Release manually — the pin holds a native reference in the target app.
+captured.release()
+```
+
+### `mode` — where the text goes
+
+Field state: `hello| world` — caret after *hello*, nothing selected.
+
+| mode | does | result here |
+| --- | --- | --- |
+| `'caret'` (default) | insert at the captured caret | `hello THERE| world` |
+| `'selection'` | replace the captured selection | refused — `'no-selection'` (nothing was selected) |
+| `'all'` | replace the whole value | `THERE` — but **only** via the verified write |
+
+The guard rails are opinionated on purpose: `'caret'` refuses when a selection exists
+(`'selection-in-the-way'` — inserting would silently eat it), and `'all'` refuses on anything
+unverifiable (`'unreadable-replace-all'`) — wiping a document you can't read back isn't an
+edit, it's destruction.
+
+### `strategy` — how it travels
+
+`'auto'` (default) climbs the ladder below. Force `'clipboard'` or `'keystrokes'` only when you
+know the target better than the classifier does.
+
+## Every refusal, grouped
+
+```
+empty-text · no-permission · secure-input · released           you / your process
+app-changed · element-changed · element-gone                   the world moved on → "click back into the field"
+read-only · element-disabled                                   the field says no
+selection-in-the-way · no-selection · unreadable-replace-all   mode doesn't fit reality
+paste-not-posted · paste-did-not-land · type-failed            delivery genuinely failed
+```
+
+Each maps to a distinct user-facing message. That's the design bet of the whole API: `false`
+tells you nothing; `{ delivered: false, reason: 'secure-input' }` tells you what to say.
 
 ## How delivery works
 
@@ -148,13 +251,23 @@ Details that took the scars to learn, so you don't have to:
   Chromium-family apps track modifiers from the event stream and treat a flag-only chord as a
   bare `v`.
 - Focus is read from the **window server's window list**, not `NSWorkspace` and not the AX
-  system-wide focused application: both of those are notification-fed caches that silently
-  freeze at their first answer in a process without a serviced run loop — i.e. every plain
-  Node.js process. (Measured; the E2E suite exists because of it.)
+  system-wide focused application: both are notification-fed caches that silently freeze at
+  their first answer in a process without a serviced run loop — i.e. every plain Node.js
+  process. (Measured; the E2E suite exists because of it.)
 - A failed paste **leaves the text on the clipboard** — content the user can still paste by
   hand beats content that vanished.
 - Paste verification demands **positive evidence** to report failure: a field that reads empty
   on both sides of a paste proves nothing about the paste.
+
+## CLI
+
+```bash
+npx macos-insertable doctor        # permission and platform state
+npx macos-insertable watch 30      # follow the frontmost app; click into fields to test them
+npx macos-insertable sweep         # one pass over running apps (their remembered focus)
+```
+
+Metadata only — roles, kinds, labels, lengths. Field content never leaves the process.
 
 ## Testing
 
