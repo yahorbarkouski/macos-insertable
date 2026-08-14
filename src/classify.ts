@@ -159,6 +159,23 @@ function isReadOnly(element: RawFocusedElement): boolean {
   return !element.valueSettable && !element.selectedTextSettable
 }
 
+/** Layout artifacts rich editors keep in their accessibility value alongside decoration:
+ *  newlines, zero-widths, and the object-replacement character. */
+const PHANTOM_TAIL = /^[\s​‌﻿⁠￼]{0,2}$/
+
+/**
+ * Whether `value` is the element's rendered placeholder rather than content. Exact equality is
+ * not enough: composers keep a trailing newline or zero-width artifact after the placeholder
+ * text (`"Ask anything…\n"`), so the check is placeholder-prefix plus a short junk-only tail.
+ * A phantom mistaken for content gets MATERIALIZED into the document by any whole-value write —
+ * the placeholder typed ahead of the user's text.
+ */
+export function isPlaceholderPhantom(value: string, placeholder: string): boolean {
+  if (placeholder === '' || value === '') return false
+  if (!value.startsWith(placeholder)) return false
+  return PHANTOM_TAIL.test(value.slice(placeholder.length))
+}
+
 export interface ClassifyOptions {
   /** Value length cap applied to the captured text. */
   maxValueChars: number
@@ -207,7 +224,7 @@ function buildFieldInfo(
   // Rich composers render their placeholder as literal text in the accessibility value while
   // empty. That text is decoration, not content — reporting it as the field's value hands
   // callers a phantom document.
-  const phantomValue = element.placeholder !== '' && element.value === element.placeholder
+  const phantomValue = isPlaceholderPhantom(element.value, element.placeholder)
 
   // An opaque element's text is not the document; presenting IME scratch as content is how a
   // caller ends up "verifying" against a decoy.
