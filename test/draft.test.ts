@@ -407,3 +407,50 @@ describe('submit', () => {
     expect(await captured.submit()).toEqual({ submitted: false, reason: 'released' })
   })
 })
+
+describe('trust ladder — drafts on untrusted web surfaces go splice-first', () => {
+  function webBridge(value: string): NativeBridge {
+    const attrs = ['AXRole', 'AXValue', 'AXSelectedText', 'AXSelectedTextRange', 'ChromeAXNodeId']
+    return fakeBridge({
+      readFocusedElement: vi.fn(async () =>
+        element({
+          value,
+          numberOfCharacters: value.length,
+          selectionStart: 0,
+          attributeNames: attrs
+        })
+      ),
+      readElementState: vi.fn(async () =>
+        textState({ value, selectionStart: 0, selectionLength: 0 })
+      )
+    })
+  }
+
+  it('starts splice-first on a scratch-valued web element — one write per update', async () => {
+    const bridge = webBridge('​​')
+    const captured = await captureFocusedField({ bridge })
+    if (captured.status !== 'field') throw new Error('expected a field')
+    const started = await captured.startDraft()
+    if (!started.ok) throw new Error(`draft refused: ${started.reason}`)
+    await started.draft.update('their')
+    // Argument 8 is preferSplice: 1 skips the selected-text tactic a decoy could tunnel.
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls[0]?.[8]).toBe(1)
+  })
+
+  it('lets a web element with real content keep the discovery cascade', async () => {
+    const bridge = webBridge('already has content')
+    const captured = await captureFocusedField({ bridge })
+    if (captured.status !== 'field') throw new Error('expected a field')
+    const started = await captured.startDraft()
+    if (!started.ok) throw new Error(`draft refused: ${started.reason}`)
+    await started.draft.update('their')
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls[0]?.[8]).toBe(0)
+  })
+
+  it('keeps native drafts on the discovery cascade', async () => {
+    const bridge = liveFieldBridge('', 0)
+    const draft = await draftOn(bridge)
+    await draft.update('their')
+    expect(vi.mocked(bridge.casRangeEdit).mock.calls[0]?.[8]).toBe(0)
+  })
+})

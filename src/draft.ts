@@ -85,6 +85,9 @@ export type DraftUpdateResult =
         | 'draft-drifted'
         /** The range could not be aimed or the replacement did not land. */
         | 'range-write-failed'
+      /** A write went out whose effect this element could not confirm; the text may be in the
+       *  document regardless. Do not blind-retry when set. */
+      mayHaveLanded?: boolean
     }
 
 export class Draft {
@@ -100,13 +103,23 @@ export class Draft {
   /** Which swap tactic this element answers to, learned from the first delivered update:
    *  Chromium silently ignores selected-text writes and needs the whole-value splice, AppKit
    *  takes the O(edit) selected-text path. Discovery is paid once, not per update. */
-  #preferSplice = false
+  #preferSplice: boolean
 
-  constructor(bridge: NativeBridge, token: string, anchor: number, initialText: string) {
+  constructor(
+    bridge: NativeBridge,
+    token: string,
+    anchor: number,
+    initialText: string,
+    options: { preferSplice?: boolean } = {}
+  ) {
     this.#bridge = bridge
     this.#token = token
     this.#anchor = anchor
     this.#text = initialText
+    // Splice-first is both the discovery shortcut (Chromium never honors the selected-text
+    // tactic) and the safety bound on untrusted web surfaces: one verifiable write per update
+    // instead of a two-tactic cascade a decoy could tunnel twice.
+    this.#preferSplice = options.preferSplice ?? false
   }
 
   /** The text the draft currently owns. */
@@ -168,9 +181,12 @@ export class Draft {
         case 'region-mismatch':
           return { delivered: false, reason: 'draft-drifted' }
         case 'select-failed':
+          // Refused while aiming — nothing was written yet.
+          return { delivered: false, reason: 'range-write-failed' }
         case 'write-failed':
         case 'verify-failed':
-          return { delivered: false, reason: 'range-write-failed' }
+          // The swap itself went out and could not be confirmed by this element.
+          return { delivered: false, reason: 'range-write-failed', mayHaveLanded: true }
         default:
           return { delivered: false, reason: 'element-gone' }
       }

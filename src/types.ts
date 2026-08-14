@@ -24,6 +24,10 @@ export type FieldKind = 'field' | 'area' | 'container'
 export interface FieldInfo {
   kind: FieldKind
   surface: Surface
+  /** Whether the element lives in web content (browser-engine DOM vocabulary present). Web
+   *  content is where decoy elements exist, so it gates the delivery trust rules: a web field
+   *  must show readable evidence before precise writes are attempted against it. */
+  web: boolean
   /** What the application calls this field, first non-empty of title/placeholder/description.
    *  UNTRUSTED and capped — an application can put anything here. */
   label: string
@@ -143,7 +147,17 @@ export type InsertRefusal =
 
 export type InsertResult =
   | { delivered: true; via: DeliveredVia }
-  | { delivered: false; reason: InsertRefusal }
+  | {
+      delivered: false
+      reason: InsertRefusal
+      /**
+       * A write with unobservable effect went out before this refusal — a paste that was
+       * posted, typing that may have partially landed, or an Accessibility write a decoy could
+       * have tunneled into the document. Callers must NOT blind-retry when this is set: the
+       * text may already be there. Say so, and let the user look before trying again.
+       */
+      mayHaveLanded?: boolean
+    }
 
 /** Permission and environment state, checked without touching any other process. */
 export interface Access {

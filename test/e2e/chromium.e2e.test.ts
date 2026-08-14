@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { loadBridge } from '../../src/addon.js'
 import { type CapturedField, captureFocusedField } from '../../src/capture.js'
+import { valueCarriesEvidence } from '../../src/classify.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const demo = join(here, '..', '..', 'demo')
@@ -140,4 +141,39 @@ describe.skipIf(runnable)('chromium end-to-end prerequisites', () => {
     ].filter((entry): entry is string => entry !== null)
     expect(missing.length).toBeGreaterThan(0)
   })
+})
+
+describe.skipIf(!runnable).sequential('trust ladder against live Chromium', () => {
+  it('inserts into an EMPTY web textarea with a single paste — the untrusted opening move', async () => {
+    // An empty Chromium textarea is web + scratch: precise writes against it are undecidable
+    // (Chromium reports success for inert writes), so the first delivery is one paste, which
+    // creates its own evidence. Exactly one copy may land.
+    const pid = await startHost('textarea')
+    using captured = await captureHost(pid)
+    expect(captured.field).toMatchObject({ surface: 'readable', web: true, value: '' })
+
+    const inserted = await captured.insert('exactly once ')
+    expect(inserted).toEqual({ delivered: true, via: 'clipboard' })
+
+    const bridge2 = loadBridge()
+    if (!bridge2) throw new Error('bridge missing')
+    const raw = await bridge2.readFocusedElement(pid, 500, 4000)
+    if (!raw) throw new Error('textarea unreadable raw')
+    const occurrences = raw.value.split('exactly once').length - 1
+    bridge2.releaseElement(raw.token)
+    expect(occurrences).toBe(1)
+  }, 30_000)
+
+  it('grants precise writes back once the field carries real content', async () => {
+    const pid = await startHost('textarea')
+    using captured = await captureHost(pid)
+    await captured.insert('seed. ')
+    // Re-capture: the field now shows evidence, so the trust rule admits the AX rungs — on
+    // Chromium those still fall through to a verified paste, but the ladder is engaged.
+    const again = await captureFocusedField({ pid, timeoutMs: 500 })
+    if (again.status !== 'field') throw new Error('recapture failed')
+    expect(again.field.web).toBe(true)
+    expect(valueCarriesEvidence(again.field.value)).toBe(true)
+    again.release()
+  }, 30_000)
 })

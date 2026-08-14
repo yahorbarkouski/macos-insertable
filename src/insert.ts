@@ -15,7 +15,7 @@
  */
 
 import type { AppIdentity, NativeBridge, RawTextState } from './bridge.js'
-import { buildIdentity } from './classify.js'
+import { buildIdentity, valueCarriesEvidence } from './classify.js'
 import { waitForModifiersReleased } from './modifiers.js'
 import { fitSpacing } from './spacing.js'
 import type { FieldInfo, InsertOptions, InsertResult, Spacing } from './types.js'
@@ -126,13 +126,47 @@ export async function insertInto(
 
   const fitted = await fitToSurroundings(bridge, token, field, text, mode, options.spacing)
 
-  if (strategy === 'auto' && field.surface === 'readable') {
+  // The trust rule that bounds damage under misclassification. Every measured decoy is web
+  // content with a scratch-only value, and against such an element an Accessibility write is
+  // undecidable: "ok" plus an unchanged read-back is either an inert write (real field) or one
+  // that tunneled into a document this element does not mirror (decoy) — and falling through
+  // to paste after a tunneled write is how text lands twice. So a web element earns the
+  // verified-write path by showing readable evidence; until then delivery is a single
+  // self-verifying paste, which CREATES evidence on a real field and lands exactly once,
+  // trusted, on a decoy. Native controls are exempt: no decoy has ever been measured outside
+  // web content, and their writes verify honestly.
+  const untrustedSurface =
+    field.surface === 'readable' && field.web && !valueCarriesEvidence(field.value)
+
+  if (strategy === 'auto' && field.surface === 'readable' && !untrustedSurface) {
     const written = await accessibilityWrite(bridge, token, field, fitted, mode)
     if (written) return { delivered: true, via: 'accessibility' }
     if (mode === 'all') {
       // The whole-field write did not take; an inexact fallback could destroy the document.
-      return { delivered: false, reason: 'unreadable-replace-all' }
+      return { delivered: false, reason: 'unreadable-replace-all', mayHaveLanded: true }
     }
+  }
+
+  if (mode === 'all' && untrustedSurface) {
+    // Replace-all still demands read-back proof, but on an untrusted surface the attempt is
+    // bounded to ONE write: setValue, verified or refused. The replaceRange tactic would make
+    // it two possible invisible writes against an element that may not mirror either.
+    const before = await bridge
+      .readElementState(token, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS)
+      .catch(() => null)
+    const write = await bridge
+      .setValue(token, fitted, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS)
+      .catch(() => null)
+    if (write?.ok) {
+      if (didTextLand(before, write.after, fitted, mode)) {
+        return { delivered: true, via: 'accessibility' }
+      }
+      if (await landed(bridge, token, before, fitted, mode)) {
+        return { delivered: true, via: 'accessibility' }
+      }
+      return { delivered: false, reason: 'unreadable-replace-all', mayHaveLanded: true }
+    }
+    return { delivered: false, reason: 'unreadable-replace-all' }
   }
 
   // Everything below posts synthetic events, so the user's own chord has to be out of the way
@@ -310,7 +344,9 @@ async function clipboardDelivery(
     restorable = bridge.pasteboardChangeCount() === expectedChangeCount
     if (!landed) {
       restorable = false
-      return { delivered: false, reason: 'paste-did-not-land' }
+      // The chord DID go out; only this element failed to show the result. The text may be in
+      // the document of an element that does not mirror it — a blind retry can double it.
+      return { delivered: false, reason: 'paste-did-not-land', mayHaveLanded: true }
     }
     return { delivered: true, via: 'clipboard' }
   } finally {
@@ -336,9 +372,11 @@ async function typedDelivery(
     return { delivered: false, reason: 'type-failed' }
   }
   const typed = await bridge.typeUnicode(app.pid, text).catch(() => false)
+  // A false answer can mean "never posted" or "posted, then the app lost frontmost mid-chunk";
+  // characters may already be in the field either way.
   return typed
     ? { delivered: true, via: 'keystrokes' }
-    : { delivered: false, reason: 'type-failed' }
+    : { delivered: false, reason: 'type-failed', mayHaveLanded: true }
 }
 
 function snapshotPasteboard(bridge: NativeBridge): string | null {
@@ -401,8 +439,10 @@ export function readCarriesEvidence(
   after: RawTextState | null
 ): boolean {
   if (!after?.hasValue) return false
-  if (after.value.length > 0) return true
-  return before?.hasValue === true && before.value.length > 0
+  // Scratch — zero-widths and whitespace — is decoration, not testimony: a decoy holding two
+  // zero-width spaces must not be allowed to convict a paste that landed in the document.
+  if (valueCarriesEvidence(after.value)) return true
+  return before?.hasValue === true && valueCarriesEvidence(before.value)
 }
 
 /**
@@ -419,7 +459,9 @@ export function didTextLand(
   if (!after) return false
 
   // Nothing to compare against: accept a plausible end state rather than fail a real write.
-  if (!before) return after.value.includes(text) || after.value.length > 0
+  // Plausible means real content — scratch (zero-widths, whitespace) is what a decoy shows
+  // regardless of what happened, and must not pass for an end state.
+  if (!before) return after.value.includes(text) || valueCarriesEvidence(after.value)
 
   if (mode === 'all') return after.value === text || after.value !== before.value
 
