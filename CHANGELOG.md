@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.0
+
+The native addon has been rebuilt around explicit, enforceable architecture boundaries.
+
+- The 2,031-line Objective-C++ catch-all is gone. Accessibility reads, edits, streaming CAS,
+  synthetic input, system probes, pasteboard operations, N-API parsing, lifecycle state, and addon
+  registration now have named owners in ten focused implementation modules.
+- AX element and pasteboard tokens are owned by the Node environment that created them. Abandoned
+  resources are released during environment cleanup, while already-admitted workers retain a safe
+  lease until their operation finishes.
+- Direct native calls now reject malformed PIDs, timeouts, UTF-16 indexes, ranges, NaN, infinities,
+  and fractional values before they reach Core Foundation or a worker. Existing negative caret
+  sentinels and nonzero splice flags remain compatible.
+- Worker-thread teardown is safe when native work has already been queued. A bounded regression
+  test repeatedly terminates fresh environments and proves their token stores stay isolated.
+- Pasteboard exceptions are contained at the N-API boundary instead of unwinding into Node.
+- A lint-integrated architecture check keeps the source graph acyclic, requires ARC and teardown
+  safety, and verifies that the compiled addon exports exactly the `NativeBridge` contract.
+
 ## 0.6.0
 
 The trust ladder: delivery is now safe under classification error, not merely after it.

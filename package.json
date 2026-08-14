@@ -1,6 +1,6 @@
 {
   "name": "macos-insertable",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Find the focused text field of any macOS application, learn whether text can be inserted there, and insert it \u2014 verified, safely, through the Accessibility API with clipboard and keystroke fallbacks.",
   "keywords": [
     "macos",
