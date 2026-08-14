@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2
+
+- Decoy geometry: `readFocusedElement` now reports the element's frame and display
+  intersection, and an editor whose box is tiny in BOTH dimensions or parked off every display
+  classifies as `opaque`. Fixes Google Docs (measured live): its IME decoy carries a value and
+  a settable selection, so it classified `readable` and paste verification convicted pastes
+  that had visibly landed. Geometry-only — no site lists; a single degenerate dimension is
+  deliberately not enough.
+
 ## 0.3.1
 
 - Classifier fix: a role-less container now needs **editability evidence** — a settable
