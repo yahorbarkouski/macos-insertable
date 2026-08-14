@@ -30,7 +30,7 @@ function describe(capture: Capture): string {
     case 'disabled':
       return `disabled ${capture.role}`
     case 'not-a-field':
-      return `not a field (${capture.role}${capture.subrole ? '/' + capture.subrole : ''})`
+      return `not a field (${capture.role}${capture.subrole ? `/${capture.subrole}` : ''})`
     case 'no-element':
       return 'no focused element reported'
     case 'no-permission':

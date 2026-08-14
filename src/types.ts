@@ -80,9 +80,22 @@ export type InsertMode = 'caret' | 'selection' | 'all'
  */
 export type InsertStrategy = 'auto' | 'clipboard' | 'keystrokes'
 
+/**
+ * What to do about the whitespace between the inserted text and the text already there.
+ *
+ * `exact` inserts the string as given. `fit` adjusts only the leading and trailing whitespace so
+ * the result reads correctly against its surroundings — adding a separator after a word,
+ * omitting one after "re-" or inside Han text, never adding a dangling one at the end of a
+ * field. It changes no words, punctuation or capitalization, and it needs a readable surface;
+ * where the surroundings cannot be read there is no context to fit to and the text goes in as
+ * given.
+ */
+export type Spacing = 'exact' | 'fit'
+
 export interface InsertOptions {
   mode?: InsertMode
   strategy?: InsertStrategy
+  spacing?: Spacing
   /**
    * Wait up to this long for the user to release modifier keys before posting synthetic input.
    * A chord still physically held while a paste goes out can turn ⌘V into ⌘⇧V or worse — the

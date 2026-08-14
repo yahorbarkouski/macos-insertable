@@ -405,6 +405,22 @@ describe.skipIf(!runnable).sequential('end-to-end against a live AppKit host', (
     expect(value).toBe('line one\n')
   }, 30_000)
 
+  it('fits spacing against the live field across consecutive dictations', async () => {
+    const pid = await startHost('textview')
+    using captured = await captureHostField(pid)
+
+    // Three insertions, none carrying its own whitespace, judged against what the previous one
+    // left in the real field.
+    for (const word of ['First', 'second', 'third']) {
+      const result = await insertOnceFrontmost(captured, word, { spacing: 'fit' })
+      expect(result.delivered).toBe(true)
+    }
+    expect((await captured.reread())?.value).toBe('First second third')
+
+    // …and no dangling separator when the user stops.
+    expect((await captured.reread())?.value.endsWith('third')).toBe(true)
+  }, 30_000)
+
   it('refuses to insert after the host loses frontmost', async () => {
     const pid = await startHost('textview')
     using captured = await captureHostField(pid)

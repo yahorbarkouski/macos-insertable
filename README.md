@@ -238,6 +238,37 @@ The guard rails are opinionated on purpose: `'caret'` refuses when a selection e
 unverifiable (`'unreadable-replace-all'`) — wiping a document you can't read back isn't an
 edit, it's destruction.
 
+### `spacing` — fitting the text to what's around it
+
+Dictated text arrives not knowing where it lands. `spacing: 'fit'` adjusts **only** the leading
+and trailing whitespace so the result reads correctly — it never changes your words,
+punctuation, or capitalization.
+
+```ts
+await captured.insert('world', { spacing: 'fit' })
+// after "Hello"   → "Hello world"      (separator added)
+// after "Hello "  → "Hello world"      (already separated)
+// after "re-"     → "re-world"         (mid-token, no separator)
+// after "你好"     → "你好world"         (Han takes no spaces)
+// after "("       → "(world"           (an opener hugs what follows)
+```
+
+The rules are Unicode's, not a hand-written character list: no-space scripts come from
+`Script_Extensions` (so CJK, Thai, Lao, Khmer, Myanmar and their shared punctuation are covered
+without a table to fall behind the standard), and invisible characters are skipped via
+`Default_Ignorable_Code_Point` — which matters because some applications park a zero-width space
+at an empty insertion point, and reading that as content suppresses a separator you wanted.
+
+Two properties worth knowing: it **never leaves a trailing space** at the end of a field (the
+next insertion adds its own leading one, so consecutive dictation still separates and a user who
+stops isn't left with dangling whitespace), and it is **idempotent** — fitting already-fitted
+text changes nothing. Context is read live at delivery, not from capture, so a second sentence
+is judged against what the first one left behind.
+
+Fitting needs a readable surface; where the surroundings can't be read there is no context and
+the text goes in exactly as given. The same logic is exported standalone as `fitSpacing(text,
+{ before, after })` for callers who want to fit before they insert.
+
 ### `strategy` — how it travels
 
 `'auto'` (default) climbs the ladder below. Force `'clipboard'` or `'keystrokes'` only when you

@@ -37,6 +37,8 @@ export type { DraftUpdateResult, MinimalEdit } from './draft.js'
 export { Draft, minimalEdit } from './draft.js'
 export { didTextLand, readCarriesEvidence } from './insert.js'
 export { waitForModifiersReleased } from './modifiers.js'
+export type { InsertionContext } from './spacing.js'
+export { fitSpacing } from './spacing.js'
 export { traitsFor } from './traits.js'
 export type {
   Access,
@@ -51,6 +53,7 @@ export type {
   InsertRefusal,
   InsertResult,
   InsertStrategy,
+  Spacing,
   Surface,
   TargetTraits
 } from './types.js'

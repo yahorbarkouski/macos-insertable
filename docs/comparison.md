@@ -120,6 +120,24 @@ compare the region against what we last wrote, replace the changed span, verify,
 If the user edited inside the region, it refuses with `draft-drifted` — their keystrokes outrank
 the transcript. Nothing else in the field has a concept of "the user got there first".
 
+**Contextual spacing that is correct in every script.** Four projects adjust whitespace around
+an insertion. Handy and VoiceInk have a boolean that appends a trailing space. OpenWhispr reads
+the single character before the caret against two ASCII sets. Amical's is far the best of them —
+both sides, script-aware, zero-width-aware — and is the implementation this library's was built
+to beat. Three things it gets wrong, each covered by a test here:
+
+- A hyphen or slash before the caret is not an opener in their set, so `re-` + `enable` becomes
+  `re- enable` and `src/` + `index.ts` becomes `src/ index.ts`.
+- All punctuation on the right suppresses the separator, so `Hello` + `(aside)` becomes
+  `Hello(aside)` — an opening bracket belongs to what follows it.
+- Emoji live in their punctuation-and-symbol ranges, so `Hello` + `👋` becomes `Hello👋`.
+
+Structurally, their script and punctuation rules are ~80 lines of hand-maintained code-point
+tables; ours are Unicode properties (`Script_Extensions`, `Default_Ignorable_Code_Point`), which
+is shorter, covers scripts and shared punctuation their tables miss, and cannot fall behind the
+standard. Ours also never leaves a trailing space at the end of a field — theirs does — which
+makes it idempotent and leaves nothing dangling when the user stops dictating.
+
 **Classification as a public answer.** `readFocusedField()` tells you *what* is focused and
 whether it's insertable and how (`readable` = verified writes, `opaque` = paste-only), including
 the cases that exist to be refused. Amical has the field's richest AX stack and uses it only to

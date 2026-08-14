@@ -198,6 +198,103 @@ describe('rung 1 — the one-call range replace, preferred where implemented', (
   })
 })
 
+describe('spacing: fit', () => {
+  /** A bridge whose field holds `value` with the caret at `caret`. */
+  function fieldHolding(value: string, caret: number): NativeBridge {
+    return fakeBridge({
+      readElementState: vi.fn(async () =>
+        textState({ value, selectionStart: caret, selectionLength: 0 })
+      )
+    })
+  }
+
+  it('separates the insertion from the word before it', async () => {
+    const bridge = fieldHolding('Hello', 5)
+    const captured = await capturedWith(bridge, { value: 'Hello', selectionStart: 5 })
+    await captured.insert('world', { spacing: 'fit' })
+    expect(bridge.setSelectedText).toHaveBeenCalledWith(
+      'ax-1',
+      ' world',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+
+  it('inserts exactly what it was given by default', async () => {
+    const bridge = fieldHolding('Hello', 5)
+    const captured = await capturedWith(bridge, { value: 'Hello', selectionStart: 5 })
+    await captured.insert('world')
+    expect(bridge.setSelectedText).toHaveBeenCalledWith(
+      'ax-1',
+      'world',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+
+  it('judges against the LIVE field, not the state captured seconds ago', async () => {
+    // The user dictated once already; the separator must be judged against what that left.
+    const bridge = fieldHolding('Hello world', 11)
+    const captured = await capturedWith(bridge, { value: 'Hello', selectionStart: 5 })
+    await captured.insert('again', { spacing: 'fit' })
+    expect(bridge.setSelectedText).toHaveBeenCalledWith(
+      'ax-1',
+      ' again',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+
+  it('adds nothing when the field already ends in whitespace', async () => {
+    const bridge = fieldHolding('Hello ', 6)
+    const captured = await capturedWith(bridge, { value: 'Hello ', selectionStart: 6 })
+    await captured.insert('world', { spacing: 'fit' })
+    expect(bridge.setSelectedText).toHaveBeenCalledWith(
+      'ax-1',
+      'world',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+
+  it('separates on both sides when the caret sits mid-text', async () => {
+    const bridge = fieldHolding('Helloworld', 5)
+    const captured = await capturedWith(bridge, { value: 'Helloworld', selectionStart: 5 })
+    await captured.insert('brave', { spacing: 'fit' })
+    expect(bridge.setSelectedText).toHaveBeenCalledWith(
+      'ax-1',
+      ' brave ',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+
+  it('leaves an opaque surface untouched — there is no context to fit to', async () => {
+    const bridge = fakeBridge({
+      setSelectedText: vi.fn(async () => ({ ok: false, error: 'refused', after: null })),
+      readElementState: vi
+        .fn<NativeBridge['readElementState']>()
+        .mockResolvedValueOnce(textState())
+        .mockResolvedValue(textState({ value: 'hello world' }))
+    })
+    const captured = await capturedWith(bridge, OPAQUE)
+    await captured.insert('world', { spacing: 'fit' })
+    expect(bridge.pasteboardWriteText).toHaveBeenCalledWith('world')
+  })
+
+  it('does not fit a whole-field replacement — it replaces the surroundings', async () => {
+    const bridge = fieldHolding('Hello', 5)
+    const captured = await capturedWith(bridge, { value: 'Hello', selectionStart: 5 })
+    await captured.insert('replaced', { mode: 'all', spacing: 'fit' })
+    expect(bridge.setValue).toHaveBeenCalledWith(
+      'ax-1',
+      'replaced',
+      expect.any(Number),
+      expect.any(Number)
+    )
+  })
+})
+
 describe('modifier gate before synthetic input', () => {
   it('refuses to post a paste while the user still holds a chord', async () => {
     const bridge = fakeBridge({

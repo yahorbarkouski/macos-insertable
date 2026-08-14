@@ -17,7 +17,8 @@
 import type { AppIdentity, NativeBridge, RawTextState } from './bridge.js'
 import { buildIdentity } from './classify.js'
 import { waitForModifiersReleased } from './modifiers.js'
-import type { FieldInfo, InsertOptions, InsertResult } from './types.js'
+import { fitSpacing } from './spacing.js'
+import type { FieldInfo, InsertOptions, InsertResult, Spacing } from './types.js'
 
 /** How long to let the user's own hotkey chord clear before posting synthetic input. Long
  *  enough for a hold-to-talk release, short enough to stay imperceptible. */
@@ -123,8 +124,10 @@ export async function insertInto(
   }
   if (!verified.enabled) return { delivered: false, reason: 'element-disabled' }
 
+  const fitted = await fitToSurroundings(bridge, token, field, text, mode, options.spacing)
+
   if (strategy === 'auto' && field.surface === 'readable') {
-    const written = await accessibilityWrite(bridge, token, field, text, mode)
+    const written = await accessibilityWrite(bridge, token, field, fitted, mode)
     if (written) return { delivered: true, via: 'accessibility' }
     if (mode === 'all') {
       // The whole-field write did not take; an inexact fallback could destroy the document.
@@ -141,9 +144,9 @@ export async function insertInto(
   if (!released) return { delivered: false, reason: 'modifiers-held' }
 
   if (strategy === 'keystrokes') {
-    return typedDelivery(bridge, app, field, text, mode)
+    return typedDelivery(bridge, app, field, fitted, mode)
   }
-  return withPasteboardTurn(() => clipboardDelivery(bridge, token, app, field, text, mode))
+  return withPasteboardTurn(() => clipboardDelivery(bridge, token, app, field, fitted, mode))
 }
 
 /**
@@ -187,6 +190,39 @@ async function accessibilityWrite(
   if (!write?.ok) return false
   if (didTextLand(before, write.after, text, mode)) return true
   return landed(bridge, token, before, text, mode)
+}
+
+/**
+ * Applies {@link fitSpacing} against the field's LIVE surroundings, when asked for.
+ *
+ * Live rather than capture-time: seconds pass between capture and delivery, and a caller
+ * dictating a second sentence needs the separator judged against what the first one left
+ * behind. The extra read is only paid when fitting is requested.
+ *
+ * Returns the text untouched wherever there is no context to fit to — an opaque surface reports
+ * no value, and `all` mode replaces the surroundings rather than joining them.
+ */
+async function fitToSurroundings(
+  bridge: NativeBridge,
+  token: string,
+  field: FieldInfo,
+  text: string,
+  mode: 'caret' | 'selection' | 'all',
+  spacing: Spacing | undefined
+): Promise<string> {
+  if (spacing !== 'fit' || mode === 'all' || field.surface !== 'readable') return text
+
+  const state = await bridge
+    .readElementState(token, WRITE_TIMEOUT_MS, VERIFY_MAX_CHARS)
+    .catch(() => null)
+  if (!state?.hasValue || state.selectionStart === null || state.selectionLength === null) {
+    return text
+  }
+
+  // In selection mode the selection is what the text replaces, so it is neither side's context.
+  const start = state.selectionStart
+  const end = start + state.selectionLength
+  return fitSpacing(text, { before: state.value.slice(0, start), after: state.value.slice(end) })
 }
 
 /** The range `AXReplaceRangeWithText` should target, or null when the mode's target cannot be
@@ -364,9 +400,9 @@ export function readCarriesEvidence(
   before: RawTextState | null,
   after: RawTextState | null
 ): boolean {
-  if (!after || !after.hasValue) return false
+  if (!after?.hasValue) return false
   if (after.value.length > 0) return true
-  return before !== null && before.hasValue && before.value.length > 0
+  return before?.hasValue === true && before.value.length > 0
 }
 
 /**

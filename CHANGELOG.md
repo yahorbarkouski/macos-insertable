@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+- **`spacing: 'fit'`** on `insert`, and `fitSpacing(text, { before, after })` exported for
+  callers who want it standalone. Adjusts only the whitespace around an insertion so it reads
+  correctly against its surroundings — never the words, punctuation or capitalization.
+  Context is read live at delivery, so a second dictation is judged against what the first left.
+  - Script rules come from Unicode properties rather than hand-maintained code-point tables:
+    `Script_Extensions` covers CJK, Thai, Lao, Khmer, Myanmar, Tibetan and friends *and* the
+    punctuation they share, so an ideographic full stop counts as Han; Korean, which does space
+    its words, correctly keeps them.
+  - Invisible characters are skipped via `Default_Ignorable_Code_Point`. Some applications park
+    a zero-width space at an empty insertion point, which otherwise reads as real content and
+    suppresses a separator that was wanted.
+  - A boundary taxonomy rather than one punctuation bucket: openers hug what follows (`(` +
+    `aside` → `(aside`), terminators hug what precedes (`Hello` + `, then`), and connectors join
+    only from the left (`re-` + `enable` → `re-enable`, while `Hello` + `— aside` keeps its
+    space).
+  - No trailing separator is ever added at the end of a field, which makes fitting idempotent
+    and leaves nothing dangling when the user stops; consecutive insertions still separate,
+    because the next one adds its own leading space.
+
 ## 0.4.0
 
 - **Paste chord is layout-resolved.** Physical keycode 9 is "V" only on QWERTY-shaped layouts;
