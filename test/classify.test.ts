@@ -40,6 +40,45 @@ describe('classify', () => {
       expect(verdict).toMatchObject({ status: 'field', field: { kind: 'container' } })
     })
 
+    it('rejects a selectable transcript — a caret attribute alone is not editability', () => {
+      // Measured against a live Electron app: a chat TRANSCRIPT (and even buttons) carries
+      // AXValue, AXSelectedTextRange and AXInsertionPointLineNumber, because Chromium exposes
+      // selection for READING everywhere. What it never carries is the editable-ancestor
+      // marker family or a settable value — and without those it must not be insertable.
+      const verdict = classify(
+        element({
+          role: 'AXGroup',
+          description: 'Chat messages',
+          valueSettable: false,
+          selectedTextSettable: false,
+          attributeNames: [
+            'AXRole',
+            'AXValue',
+            'AXSelectedText',
+            'AXSelectedTextRange',
+            'AXInsertionPointLineNumber'
+          ]
+        }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ status: 'not-a-field', role: 'AXGroup' })
+    })
+
+    it('accepts an unsettable browser editor through the editable-ancestor markers', () => {
+      // Chromium contenteditables expose nothing settable — their content belongs to the
+      // renderer — but stamp AXEditableAncestor on exactly the editable nodes.
+      const verdict = classify(
+        element({
+          role: 'AXGroup',
+          valueSettable: false,
+          selectedTextSettable: false,
+          attributeNames: ['AXRole', 'AXValue', 'AXSelectedTextRange', 'AXEditableAncestor']
+        }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ status: 'field', field: { kind: 'container' } })
+    })
+
     it('requires a caret: text without an insertion point is a label, not an editor', () => {
       const verdict = classify(
         element({ role: 'AXStaticText', attributeNames: ['AXRole', 'AXValue'] }),
@@ -128,13 +167,14 @@ describe('classify', () => {
 
     it('does NOT mark an unsettable container read-only — unsettable is not read-only', () => {
       // Browser-hosted editors expose nothing settable because their content belongs to the
-      // renderer, yet they take typing and pasting fine.
+      // renderer, yet they take typing and pasting fine. (The editable-ancestor marker is what
+      // admits them as editors at all.)
       const verdict = classify(
         element({
           role: 'AXGroup',
           valueSettable: false,
           selectedTextSettable: false,
-          attributeNames: ['AXRole', 'AXValue', 'AXSelectedTextRange']
+          attributeNames: ['AXRole', 'AXValue', 'AXSelectedTextRange', 'AXEditableAncestor']
         }),
         OPTIONS
       )

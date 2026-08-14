@@ -56,10 +56,13 @@ nothing ever reports failure.
 
 This library takes the opposite contract:
 
-- **Detection over guessing.** An element is a text field because of what it *advertises*
-  (text content + an insertion point), not because its role is on a list. Rich editors routinely
-  focus an `AXGroup` container that matches no text role — ChatGPT's composer is one — and a
-  role allowlist rejects all of them.
+- **Detection over guessing.** An element is a text field because of what it *advertises* —
+  text content, an insertion point, and **evidence it is actually editable** (a settable
+  value/selection, or Chromium's `AXEditableAncestor` markers) — not because its role is on a
+  list. Rich editors routinely focus an `AXGroup` container that matches no text role, and a
+  role allowlist rejects all of them. The editability clause matters in the other direction:
+  Chromium hands the caret vocabulary to *everything*, including read-only chat transcripts
+  and buttons, because selection exists for reading — measured, and excluded.
 - **Capture now, deliver later.** The focused element is pinned at capture (a live reference
   inside the target app) and re-proven before every write. Focus moved on? The insert **refuses
   with a typed reason** instead of writing into the wrong field.

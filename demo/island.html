@@ -127,9 +127,12 @@
 
     if (state.field) {
       const f = state.field
+      // An opaque surface's text is deliberately never read; showing "0 chars" would claim
+      // knowledge the library refuses to have.
+      const size = f.surface === 'readable' ? `${f.length} chars` : 'text unreadable'
       detail.textContent =
         `${f.kind}${f.multiline ? ' · multiline' : ''}${f.readOnly ? ' · read-only' : ''}` +
-        ` · ${f.length} chars${f.selected ? ` · ${f.selected} selected` : ''}` +
+        ` · ${size}${f.selected ? ` · ${f.selected} selected` : ''}` +
         (f.label ? ` · “${f.label}”` : '')
     } else {
       detail.textContent = ''

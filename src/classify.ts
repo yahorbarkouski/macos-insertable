@@ -27,8 +27,17 @@ const TEXT_ROLES: Record<string, FieldKind> = {
 const TEXT_CONTENT_ATTRIBUTES = ['AXValue', 'AXSelectedText']
 
 /** A caret is what separates an editor from a label; labels expose text but never an insertion
- *  point. */
+ *  point. Necessary but NOT sufficient — see {@link EDITABLE_MARKER_ATTRIBUTES}. */
 const CARET_ATTRIBUTES = ['AXInsertionPointLineNumber', 'AXSelectedTextRange']
+
+/**
+ * Chromium stamps these exactly on nodes inside editable content. They matter because Chromium
+ * also hands the CARET vocabulary to everything — a chat transcript, a web area, even a button
+ * advertises AXInsertionPointLineNumber and AXSelectedTextRange (selection exists for READING
+ * there, measured against a live Electron app). So for a role-less container, a caret
+ * attribute proves nothing by itself; editability must be evidenced separately.
+ */
+const EDITABLE_MARKER_ATTRIBUTES = ['AXEditableAncestor', 'AXHighestEditableAncestor']
 
 const SECURE_SUBROLES = new Set(['AXSecureTextField'])
 
@@ -42,14 +51,26 @@ const PURPOSE_SUBROLES: Record<string, string> = {
 const MULTILINE_ROLES = new Set(['AXTextArea'])
 
 /**
- * Whether the element behaves like somewhere text goes, judged by what it advertises rather than
- * what it is called: it must carry text content AND an insertion point.
+ * Whether the element behaves like somewhere text goes, judged by what it advertises rather
+ * than what it is called: it must carry text content, an insertion point, AND evidence that it
+ * is actually editable — a settable value/selection (AppKit-style editors), or Chromium's
+ * editable-ancestor markers (browser-hosted editors, which expose nothing settable because
+ * their content belongs to the renderer).
+ *
+ * The third clause is what keeps selectable-but-read-only web text out: a chat transcript
+ * carries the full text-and-caret vocabulary because its text can be selected FOR READING, and
+ * without an editability check it classifies as a paste-only editor — an insertable verdict
+ * for a surface no keystroke can ever change.
  */
 export function hasTextCapability(element: RawFocusedElement): boolean {
   const attributes = new Set(element.attributeNames)
   const carriesText = TEXT_CONTENT_ATTRIBUTES.some((name) => attributes.has(name))
   const hasCaret = CARET_ATTRIBUTES.some((name) => attributes.has(name))
-  return carriesText && hasCaret
+  const editable =
+    element.valueSettable ||
+    element.selectedTextSettable ||
+    EDITABLE_MARKER_ATTRIBUTES.some((name) => attributes.has(name))
+  return carriesText && hasCaret && editable
 }
 
 function fieldKindFor(element: RawFocusedElement): FieldKind | null {

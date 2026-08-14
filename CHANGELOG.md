@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Classifier fix: a role-less container now needs **editability evidence** — a settable
+  value/selection or Chromium's `AXEditableAncestor`/`AXHighestEditableAncestor` markers — on
+  top of the text-and-caret vocabulary. Measured against a live Electron app: Chromium gives
+  the caret attributes to read-only transcripts and even buttons (selection exists for
+  reading), so a selectable chat transcript classified as a paste-only editor — an insertable
+  verdict for a surface no keystroke can change. Browser-hosted editors keep working through
+  the marker clause; AppKit editors through settability.
+
 ## 0.3.0
 
 - Draft updates fused into one native transaction (`casRangeEdit`): compare-and-swap on the
