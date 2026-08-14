@@ -1,0 +1,3 @@
+ts	phase	decision	why	evidence	result
+2026-08-14T13:06:34Z	frame	set a behavior-preserving native refactor as the completion target	native runtime changes can compile while breaking focus, ownership, or pasteboard behavior	package.json, test/contract.test.ts, test/e2e/	open
+2026-08-14T13:06:34Z	ground	measured the native implementation at 2020 lines in one Objective-C++ file	the file mixes registry, AX reads, edits, input events, pasteboard state, N-API parsing, and addon registration	native/insertable.mm	confirmed god file

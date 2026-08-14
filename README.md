@@ -103,9 +103,15 @@ it can reach JavaScript, and no delivery path will target one.
 npm install macos-insertable
 ```
 
-macOS 11 or later. Building from source needs the Xcode Command Line Tools. On other platforms
-the package installs as an inert dependency and reports `{ status: 'unsupported' }`, so
-cross-platform apps can depend on it unconditionally.
+macOS 11 or later. Installing needs no compiler: the package ships prebuilt binaries for Apple
+Silicon and Intel, and because they are N-API each one works across every Node and Electron
+version. They are also loaded when the package is required rather than when it is installed, so
+the library still works in setups that block install scripts. Source builds are the fallback,
+and those do need the Xcode Command Line Tools.
+
+Installing on Linux or Windows succeeds and does nothing. There is no `os` restriction, so the
+package resolves everywhere and reports `{ status: 'unsupported' }` at runtime, which lets a
+cross-platform app depend on it without branching its dependency tree.
 
 Reading and writing other applications requires the Accessibility permission, granted per app in
 System Settings under Privacy & Security. Check it from the terminal:
@@ -463,6 +469,12 @@ macOS only today. The native surface is a single platform-neutral interface of a
 primitives, and a Windows UI Automation backend could satisfy it unchanged:
 `GetFocusedElement`, runtime IDs, and `ValuePattern` map onto the read, verify, and write calls.
 Contributions welcome.
+
+## Releases
+
+Published from a tag on macOS CI, which builds both architectures and attaches npm provenance,
+so a published version traces back to a commit and a workflow run. `CONTRIBUTING.md` has the
+steps. Versions follow semver, and `CHANGELOG.md` records what changed and why.
 
 ## How this compares
 
