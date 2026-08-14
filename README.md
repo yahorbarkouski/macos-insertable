@@ -16,16 +16,35 @@ const outcome = await insertText('Hello from the outside.')
 // { delivered: false, reason: 'not-insertable', capture: { status: 'secure-field', … } }
 ```
 
+And the part nothing else open-source does — **streaming text that revises itself**, at 2–7ms
+per revision:
+
+```ts
+using captured = await captureFocusedField()      // pin the field the user is in
+if (captured.status !== 'field') return
+const started = await captured.startDraft()
+if (!started.ok) return
+
+await started.draft.update('their')               // words appear while the user speaks…
+await started.draft.update('their going home')
+await started.draft.update("they're going home")  // …and the correction revises ONE word,
+                                                  // in place, without repainting the rest
+```
+
 ## The API in one glance
 
-Four functions, ordered by how involved you want to be. Every answer is a discriminated union —
-you `switch` on it, and the compiler makes sure you handled every case.
+Ordered by how involved you want to be. Every answer is a discriminated union — you `switch` on
+it, and the compiler makes sure you handled every case.
 
 ```
 checkAccess()            am I even allowed to play?
-readFocusedField()       what is focused right now?          (look, don't touch)
-insertText(text)         put this where the user is typing   (one-shot)
-captureFocusedField()    pin the field now, insert later     (the dictation pattern)
+readFocusedField()       what is focused right now?           (look, don't touch)
+insertText(text)         put this where the user is typing    (one-shot)
+captureFocusedField()    pin the field now, insert later      (the dictation pattern)
+  .insert(text, opts)      caret / selection / all · auto / clipboard / keystrokes
+  .startDraft()            a region you keep revising          (streaming, corrections)
+  .submit(modifier?)       press the send chord, safely
+  .reread()                fresh field state, same element proven first
 ```
 
 ## Why this exists
