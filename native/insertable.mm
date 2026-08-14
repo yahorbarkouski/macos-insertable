@@ -253,6 +253,44 @@ bool CopyAxBool(AXUIElementRef element, CFStringRef attribute, bool fallback) {
   return result;
 }
 
+bool CopyAxPoint(AXUIElementRef element, CFStringRef attribute, CGPoint* out) {
+  CFTypeRef value = NULL;
+  if (AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess) return false;
+  if (!value) return false;
+  bool ok = false;
+  if (CFGetTypeID(value) == AXValueGetTypeID() &&
+      AXValueGetType(static_cast<AXValueRef>(value)) == kAXValueTypeCGPoint) {
+    ok = AXValueGetValue(static_cast<AXValueRef>(value), kAXValueTypeCGPoint, out);
+  }
+  CFRelease(value);
+  return ok;
+}
+
+bool CopyAxSize(AXUIElementRef element, CFStringRef attribute, CGSize* out) {
+  CFTypeRef value = NULL;
+  if (AXUIElementCopyAttributeValue(element, attribute, &value) != kAXErrorSuccess) return false;
+  if (!value) return false;
+  bool ok = false;
+  if (CFGetTypeID(value) == AXValueGetTypeID() &&
+      AXValueGetType(static_cast<AXValueRef>(value)) == kAXValueTypeCGSize) {
+    ok = AXValueGetValue(static_cast<AXValueRef>(value), kAXValueTypeCGSize, out);
+  }
+  CFRelease(value);
+  return ok;
+}
+
+/** Whether `frame` intersects any active display, in CG global (top-left origin) coordinates —
+ *  the space kAXPositionAttribute reports in. A raw fact for TypeScript's decoy judgment. */
+bool FrameIntersectsAnyDisplay(CGRect frame) {
+  CGDirectDisplayID displays[16];
+  uint32_t count = 0;
+  if (CGGetActiveDisplayList(16, displays, &count) != kCGErrorSuccess) return true;
+  for (uint32_t i = 0; i < count; i += 1) {
+    if (CGRectIntersectsRect(CGDisplayBounds(displays[i]), frame)) return true;
+  }
+  return count == 0;
+}
+
 bool IsAttributeSettable(AXUIElementRef element, CFStringRef attribute) {
   Boolean settable = false;
   if (AXUIElementIsAttributeSettable(element, attribute, &settable) != kAXErrorSuccess) return false;
@@ -448,6 +486,14 @@ class ReadFocusedWorker : public PromiseWorker {
     valueSettable_ = IsAttributeSettable(element, kAXValueAttribute);
     selectedTextSettable_ = IsAttributeSettable(element, kAXSelectedTextAttribute);
     enabled_ = CopyAxBool(element, kAXEnabledAttribute, true);
+    CGPoint origin = CGPointZero;
+    CGSize size = CGSizeZero;
+    if (CopyAxPoint(element, kAXPositionAttribute, &origin) &&
+        CopyAxSize(element, kAXSizeAttribute, &size)) {
+      hasFrame_ = true;
+      frame_ = CGRectMake(origin.x, origin.y, size.width, size.height);
+      frameOnScreen_ = FrameIntersectsAnyDisplay(frame_);
+    }
     token_ = ElementRegistry::Shared().Store(element);
     found_ = true;
     CFRelease(element);
@@ -465,6 +511,18 @@ class ReadFocusedWorker : public PromiseWorker {
     result.Set("valueSettable", Napi::Boolean::New(env, valueSettable_));
     result.Set("selectedTextSettable", Napi::Boolean::New(env, selectedTextSettable_));
     result.Set("enabled", Napi::Boolean::New(env, enabled_));
+    if (hasFrame_) {
+      Napi::Object frame = Napi::Object::New(env);
+      frame.Set("x", Napi::Number::New(env, frame_.origin.x));
+      frame.Set("y", Napi::Number::New(env, frame_.origin.y));
+      frame.Set("width", Napi::Number::New(env, frame_.size.width));
+      frame.Set("height", Napi::Number::New(env, frame_.size.height));
+      result.Set("frame", frame);
+      result.Set("frameOnScreen", Napi::Boolean::New(env, frameOnScreen_));
+    } else {
+      result.Set("frame", env.Null());
+      result.Set("frameOnScreen", Napi::Boolean::New(env, true));
+    }
     Napi::Array attributes = Napi::Array::New(env, attributeNames_.size());
     for (size_t i = 0; i < attributeNames_.size(); i += 1) {
       attributes.Set(i, Napi::String::New(env, attributeNames_[i]));
@@ -485,6 +543,9 @@ class ReadFocusedWorker : public PromiseWorker {
   bool valueSettable_ = false;
   bool selectedTextSettable_ = false;
   bool enabled_ = true;
+  bool hasFrame_ = false;
+  CGRect frame_ = CGRectZero;
+  bool frameOnScreen_ = true;
 };
 
 /**

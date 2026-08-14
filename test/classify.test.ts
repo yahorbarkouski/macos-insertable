@@ -156,6 +156,39 @@ describe('classify', () => {
     })
   })
 
+  describe('decoy geometry forces the opaque surface', () => {
+    it('treats a tiny hidden input as opaque even when it looks readable', () => {
+      // The Google Docs case, measured live: the focused element carries a small value and a
+      // settable selection — everything `readable` asks for — but it is an IME decoy in a
+      // degenerate box. Verifying against it convicts pastes that visibly landed.
+      const verdict = classify(element({ frame: { x: 0, y: 0, width: 1, height: 1 } }), OPTIONS)
+      expect(verdict).toMatchObject({ field: { surface: 'opaque', value: '' } })
+    })
+
+    it('treats an element parked off every display as opaque', () => {
+      const verdict = classify(
+        element({ frame: { x: -9999, y: -9999, width: 300, height: 40 }, frameOnScreen: false }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ field: { surface: 'opaque' } })
+    })
+
+    it('does NOT call a zero-width but full-height editor a decoy', () => {
+      // A rich-text root inside a flex row can measure zero wide while standing full height;
+      // a single degenerate dimension proves nothing.
+      const verdict = classify(
+        element({ frame: { x: 300, y: 200, width: 0, height: 480 } }),
+        OPTIONS
+      )
+      expect(verdict).toMatchObject({ field: { surface: 'readable' } })
+    })
+
+    it('trusts an element that reports no frame at all', () => {
+      const verdict = classify(element({ frame: null }), OPTIONS)
+      expect(verdict).toMatchObject({ field: { surface: 'readable' } })
+    })
+  })
+
   describe('read-only is a narrow signal', () => {
     it('marks a role-matched control with nothing settable as read-only', () => {
       const verdict = classify(

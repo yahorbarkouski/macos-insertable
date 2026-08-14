@@ -91,10 +91,32 @@ function labelFor(element: RawElementIdentity): string {
 }
 
 /**
+ * Whether the element looks like a canvas editor's IME decoy rather than the surface being
+ * edited. Google Docs is the canonical case: its focused element carries a small value AND a
+ * settable selection — everything `readable` asks for — but it is a hidden input parked in a
+ * degenerate box, its "value" is IME scratch, and verifying writes against it convicts pastes
+ * that visibly landed in the document.
+ *
+ * Deliberately narrow, judged on geometry alone (no site lists): a decoy is tiny in BOTH
+ * dimensions or parked entirely off every display. A single small dimension proves nothing —
+ * real editors routinely report degenerate boxes (a rich-text root inside a flex row can
+ * measure zero wide while standing full height), and calling those decoys would hide a
+ * readable document behind the unverifiable path.
+ */
+function isDecoyLike(element: RawFocusedElement): boolean {
+  if (!element.frameOnScreen) return true
+  const frame = element.frame
+  if (!frame) return false
+  return frame.width <= 2 && frame.height <= 2
+}
+
+/**
  * Precise edits need both halves: readable text to verify a write against, and a settable
- * selection to write through. Missing either means aimed trusted input, as for a canvas editor.
+ * selection to write through. Missing either — or a decoy geometry that makes the "readable"
+ * text a lie — means aimed trusted input, as for a canvas editor.
  */
 function surfaceFor(element: RawFocusedElement): 'readable' | 'opaque' {
+  if (isDecoyLike(element)) return 'opaque'
   return element.hasValue && element.selectedTextSettable ? 'readable' : 'opaque'
 }
 

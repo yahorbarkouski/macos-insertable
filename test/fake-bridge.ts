@@ -32,6 +32,8 @@ export function element(overrides: Partial<RawFocusedElement> = {}): RawFocusedE
     selectedTextSettable: true,
     enabled: true,
     attributeNames: ['AXRole', 'AXValue', 'AXSelectedText', 'AXSelectedTextRange'],
+    frame: { x: 120, y: 240, width: 480, height: 120 },
+    frameOnScreen: true,
     ...overrides
   }
 }

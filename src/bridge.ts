@@ -44,6 +44,10 @@ export interface RawFocusedElement extends RawElementIdentity, RawTextState {
   valueSettable: boolean
   selectedTextSettable: boolean
   enabled: boolean
+  /** On-screen bounds in CG global coordinates, or null when the element reports none. */
+  frame: { x: number; y: number; width: number; height: number } | null
+  /** Whether `frame` intersects any active display; true when there is no frame to judge. */
+  frameOnScreen: boolean
 }
 
 export interface RawVerifyResult extends RawElementIdentity {
