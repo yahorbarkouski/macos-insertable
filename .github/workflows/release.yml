@@ -76,6 +76,12 @@ jobs:
       # Both architectures. N-API keeps each ABI-stable across every Node and Electron version.
       - run: pnpm prebuild
 
+      # Built here rather than left to prepublishOnly, which npm runs *after* it validates the
+      # manifest: the bin entry then points at a file that does not exist yet and npm warns
+      # about it on every publish. prepublishOnly still runs and stays the safety net for a
+      # publish by hand.
+      - run: pnpm build
+
       # Everything a publish does except the upload, so the pipeline can be rehearsed without a
       # token. prepublishOnly does not run for `npm pack`, so the guard is invoked directly.
       - name: Rehearse the publish
