@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad:  #f87171;
+    --dim:  #9ca3af;
+    --ink:  #f3f4f6;
+  }
+  * { box-sizing: border-box; margin: 0; user-select: none; }
+  html, body { background: transparent; }
+  body {
+    font: 13px/1.45 -apple-system, "SF Pro Text", sans-serif;
+    color: var(--ink);
+    height: 100vh;
+    padding: 8px;
+  }
+  .island {
+    -webkit-app-region: drag;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px 12px;
+    border-radius: 18px;
+    background: rgba(18, 18, 22, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
+  header { display: flex; align-items: center; gap: 10px; }
+  .lamp {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--dim);
+    box-shadow: 0 0 10px 1px currentColor;
+    color: var(--dim);
+    transition: background .2s, color .2s;
+  }
+  .verdict { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .app { margin-left: auto; color: var(--dim); font-size: 12px; max-width: 130px;
+         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail {
+    color: var(--dim); font-size: 12px; min-height: 16px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .grid {
+    -webkit-app-region: no-drag;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px;
+  }
+  button {
+    -webkit-app-region: no-drag;
+    font: 600 12px/1 -apple-system, sans-serif;
+    color: var(--ink);
+    padding: 9px 6px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+    transition: background .12s, opacity .12s;
+  }
+  button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+  button:active:not(:disabled) { background: rgba(255, 255, 255, 0.24); }
+  button:disabled { opacity: 0.35; cursor: default; }
+  button.busy { outline: 1px solid var(--good); }
+  .log {
+    margin-top: auto;
+    font: 11px/1.5 "SF Mono", ui-monospace, monospace;
+    color: var(--dim);
+    min-height: 34px; max-height: 34px;
+    overflow: hidden;
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .log .good { color: var(--good); }
+  .log .bad  { color: var(--bad); }
+</style>
+</head>
+<body>
+  <div class="island">
+    <header>
+      <div class="lamp" id="lamp"></div>
+      <div class="verdict" id="verdict">Starting…</div>
+      <div class="app" id="app"></div>
+    </header>
+    <div class="detail" id="detail"></div>
+    <div class="grid" id="grid">
+      <button data-act="insert">Insert</button>
+      <button data-act="batch">Snippets ×3</button>
+      <button data-act="stream">Stream ⚡</button>
+      <button data-act="scratch">Scratch that</button>
+      <button data-act="improveAll">Improve all</button>
+      <button data-act="improveSelection">Improve sel.</button>
+      <button data-act="send" style="grid-column: span 3">Insert + Send ↩</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+<script>
+  const lamp = document.getElementById('lamp')
+  const verdict = document.getElementById('verdict')
+  const appEl = document.getElementById('app')
+  const detail = document.getElementById('detail')
+  const logEl = document.getElementById('log')
+  const buttons = [...document.querySelectorAll('button')]
+
+  // What the island SAYS tracks what the library CONCLUDED — the live classification is the demo.
+  const faces = {
+    field: (s) =>
+      s.field.surface === 'readable'
+        ? ['Insertable — verified writes', 'good']
+        : ['Insertable — paste only', 'warn'],
+    'secure-field': () => ['Password field — refused', 'bad'],
+    disabled: () => ['Disabled field', 'warn'],
+    'not-a-field': (s) => [`Not a field (${s.role})`, 'dim'],
+    'no-element': () => ['Nothing focused', 'dim'],
+    'no-permission': () => ['Grant Accessibility to this app', 'bad'],
+    unsupported: () => ['macOS addon not built', 'bad']
+  }
+  const colors = { good: 'var(--good)', warn: 'var(--warn)', bad: 'var(--bad)', dim: 'var(--dim)' }
+
+  window.island.onState((state) => {
+    const [text, tone] = (faces[state.status] ?? (() => [state.status, 'dim']))(state)
+    verdict.textContent = state.secureInput ? 'Secure input active' : text
+    lamp.style.color = lamp.style.background = colors[state.secureInput ? 'bad' : tone]
+    appEl.textContent = state.app ?? ''
+
+    if (state.field) {
+      const f = state.field
+      detail.textContent =
+        `${f.kind}${f.multiline ? ' · multiline' : ''}${f.readOnly ? ' · read-only' : ''}` +
+        ` · ${f.length} chars${f.selected ? ` · ${f.selected} selected` : ''}` +
+        (f.label ? ` · “${f.label}”` : '')
+    } else {
+      detail.textContent = ''
+    }
+
+    const usable = state.status === 'field' && !state.secureInput
+    for (const button of buttons) {
+      const needsReadable = ['stream', 'scratch', 'improveAll', 'improveSelection'].includes(
+        button.dataset.act
+      )
+      button.disabled = !usable || (needsReadable && state.field?.surface !== 'readable')
+    }
+  })
+
+  window.island.onLog(({ text, tone }) => {
+    const line = document.createElement('div')
+    line.className = tone
+    line.textContent = text
+    logEl.append(line)
+    while (logEl.children.length > 2) logEl.firstChild.remove()
+  })
+
+  window.island.onActing((kind) => {
+    for (const button of buttons) button.classList.toggle('busy', button.dataset.act === kind)
+  })
+
+  for (const button of buttons) {
+    button.addEventListener('click', () => window.island.act(button.dataset.act))
+  }
+</script>
+</body>
+</html>

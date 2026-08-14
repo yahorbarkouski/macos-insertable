@@ -1,0 +1,17 @@
+{
+  "name": "macos-insertable-demo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Floating island that live-classifies the focused field and demos every capability. Not part of the published package.",
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true
+  }
+}
