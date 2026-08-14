@@ -203,18 +203,16 @@ ipcMain.on('act', async (_event, kind) => {
 app.whenReady().then(() => {
   app.dock?.hide()
   window = new BrowserWindow({
-    width: 420,
-    height: 268,
+    width: 320,
+    height: 148,
     frame: false,
     transparent: true,
     resizable: false,
-    hasShadow: true,
+    hasShadow: false,
     alwaysOnTop: true,
     // Load-bearing: clicks on the island must never move keyboard focus off the target field.
     focusable: false,
     type: 'panel',
-    vibrancy: 'hud',
-    visualEffectState: 'active',
     webPreferences: {
       preload: join(here, 'preload.cjs'),
       contextIsolation: true
