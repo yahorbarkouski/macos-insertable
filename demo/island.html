@@ -10,6 +10,9 @@
     --line: oklch(0.858 0 0);
     --hover: oklch(0.925 0 0);
     --active: oklch(0.89 0 0);
+    /* ink-dark, not neon: status tones that hold AA on the light surface */
+    --good: oklch(0.52 0.14 150);
+    --bad: oklch(0.5 0.18 27);
   }
   * { box-sizing: border-box; margin: 0; user-select: none; }
   html, body { background: transparent; }
@@ -71,6 +74,8 @@
     min-height: 15px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .good { color: var(--good); }
+  .bad { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -97,21 +102,25 @@
   const buttons = [...document.querySelectorAll('button')]
 
   // What the island says tracks what the library concluded — the live classification is the
-  // demo. Words carry the state; no colors, no indicators.
+  // demo. Two tones only: green for insertable, red for refusals; everything else stays ink.
   const faces = {
-    field: (s) =>
+    field: (s) => [
       s.field.surface === 'readable' ? 'Insertable, verified writes' : 'Insertable, paste only',
-    'secure-field': () => 'Password field — refused',
-    disabled: () => 'Disabled field',
-    'not-a-field': (s) => `Not a field (${s.role})`,
-    'no-element': () => 'Nothing focused',
-    'no-permission': () => 'Grant Accessibility to this app',
-    unsupported: () => 'macOS addon not built'
+      'good'
+    ],
+    'secure-field': () => ['Password field — refused', 'bad'],
+    disabled: () => ['Disabled field', ''],
+    'not-a-field': (s) => [`Not a field (${s.role})`, ''],
+    'no-element': () => ['Nothing focused', ''],
+    'no-permission': () => ['Grant Accessibility to this app', 'bad'],
+    unsupported: () => ['macOS addon not built', 'bad']
   }
 
   window.island.onState((state) => {
-    const face = faces[state.status] ?? (() => state.status)
-    verdict.textContent = state.secureInput ? 'Secure input active' : face(state)
+    const face = faces[state.status] ?? (() => [state.status, ''])
+    const [text, tone] = face(state)
+    verdict.textContent = state.secureInput ? 'Secure input active' : text
+    verdict.className = `verdict ${state.secureInput ? 'bad' : tone}`
     appEl.textContent = state.app ?? ''
 
     if (state.field) {
@@ -132,8 +141,9 @@
     }
   })
 
-  window.island.onLog(({ text }) => {
+  window.island.onLog(({ text, tone }) => {
     logEl.textContent = text
+    logEl.className = `log ${tone === 'good' || tone === 'bad' ? tone : ''}`
   })
 
   window.island.onActing((kind) => {

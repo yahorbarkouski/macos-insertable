@@ -20,6 +20,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <IOKit/IOKitLib.h>
 
 // A pasteboard snapshot is held across the paste it protects, which spans several run-loop turns.
 // Without ARC the stash keeps raw pointers into an autorelease pool that drains in between, and
@@ -1233,7 +1234,65 @@ Napi::Value RejectBadArgs(Napi::Env env, const char* signature) {
 // ── Synchronous entry points (cheap, main-thread APIs) ──────────────────────
 
 Napi::Value IsAccessibilityTrusted(const Napi::CallbackInfo& info) {
-  return Napi::Boolean::New(info.Env(), AXIsProcessTrusted() ? true : false);
+  // The options variant, not AXIsProcessTrusted(): the plain call caches its first answer for
+  // the process lifetime, so a grant revoked mid-run keeps reading as trusted forever.
+  return Napi::Boolean::New(info.Env(), AXIsProcessTrustedWithOptions(NULL) ? true : false);
+}
+
+/**
+ * Names the process holding the Secure Event Input grab, or null. The pid lives in the
+ * IOConsoleUsers property on the IORegistry ROOT entry — not under IOResources, as most
+ * write-ups claim. Best effort by Apple's own design: no reliable API is documented, and the
+ * pid can be wrong or absent when the grab was taken while the app was backgrounded.
+ */
+Napi::Value SecureInputCulprit(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (!IsSecureEventInputEnabled()) return env.Null();
+
+  io_registry_entry_t root = IORegistryGetRootEntry(kIOMainPortDefault);
+  if (!root) return env.Null();
+  CFTypeRef users =
+      IORegistryEntryCreateCFProperty(root, CFSTR("IOConsoleUsers"), kCFAllocatorDefault, 0);
+  IOObjectRelease(root);
+  if (!users) return env.Null();
+
+  pid_t culpritPid = -1;
+  if (CFGetTypeID(users) == CFArrayGetTypeID()) {
+    CFArrayRef array = static_cast<CFArrayRef>(users);
+    for (CFIndex i = 0; i < CFArrayGetCount(array) && culpritPid < 0; i += 1) {
+      CFTypeRef entry = CFArrayGetValueAtIndex(array, i);
+      if (!entry || CFGetTypeID(entry) != CFDictionaryGetTypeID()) continue;
+      CFTypeRef pidRef = CFDictionaryGetValue(static_cast<CFDictionaryRef>(entry),
+                                              CFSTR("kCGSSessionSecureInputPID"));
+      if (pidRef && CFGetTypeID(pidRef) == CFNumberGetTypeID()) {
+        int value = -1;
+        if (CFNumberGetValue(static_cast<CFNumberRef>(pidRef), kCFNumberIntType, &value)) {
+          culpritPid = static_cast<pid_t>(value);
+        }
+      }
+    }
+  }
+  CFRelease(users);
+  if (culpritPid <= 0) return env.Null();
+
+  Napi::Object result = Napi::Object::New(env);
+  result.Set("pid", Napi::Number::New(env, static_cast<double>(culpritPid)));
+  NSRunningApplication* app =
+      [NSRunningApplication runningApplicationWithProcessIdentifier:culpritPid];
+  const char* name = app && app.localizedName ? app.localizedName.UTF8String : NULL;
+  const char* bundleId = app && app.bundleIdentifier ? app.bundleIdentifier.UTF8String : NULL;
+  result.Set("name", Napi::String::New(env, name ? name : ""));
+  result.Set("bundleId", Napi::String::New(env, bundleId ? bundleId : ""));
+  return result;
+}
+
+/** The modifier flags the user is physically holding right now, masked to the four that turn a
+ *  keystroke into a shortcut. */
+Napi::Value CurrentModifierFlags(const Napi::CallbackInfo& info) {
+  CGEventFlags flags = CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);
+  constexpr CGEventFlags interesting = kCGEventFlagMaskCommand | kCGEventFlagMaskShift |
+                                       kCGEventFlagMaskControl | kCGEventFlagMaskAlternate;
+  return Napi::Number::New(info.Env(), static_cast<double>(flags & interesting));
 }
 
 /**
@@ -1430,12 +1489,62 @@ bool PostKeyToFrontmost(pid_t expectedPid, CGKeyCode keyCode, CGKeyCode modifier
   return FocusedAppPid() == expectedPid;
 }
 
+/**
+ * The virtual keycode that produces `wanted` on the CURRENT keyboard layout.
+ *
+ * Physical keycode 9 is only "V" on QWERTY-shaped layouts. Layouts in the "— QWERTY ⌘" family
+ * remap to QWERTY while Command is held, so for them the physical code is right — but on plain
+ * Dvorak or Colemak, keycode 9 under Command is ⌘K/⌘…, a different (possibly destructive)
+ * command. The two families need opposite answers, so: QWERTY-⌘ variants (input source id
+ * carries "QWERTYCMD") keep the physical code, everything else resolves the character through
+ * UCKeyTranslate over the layout's own mapping. Resolved fresh per chord — the scan is a few
+ * microseconds, entirely in-process, and caching would need a layout-change observer that a
+ * run-loop-less host can never service.
+ */
+CGKeyCode KeyCodeForChar(UniChar wanted, CGKeyCode physicalFallback) {
+  TISInputSourceRef layout = TISCopyCurrentKeyboardLayoutInputSource();
+  if (!layout) return physicalFallback;
+
+  CFStringRef sourceId = static_cast<CFStringRef>(
+      TISGetInputSourceProperty(layout, kTISPropertyInputSourceID));
+  if (sourceId &&
+      CFStringFind(sourceId, CFSTR("QWERTYCMD"), kCFCompareCaseInsensitive).location !=
+          kCFNotFound) {
+    CFRelease(layout);
+    return physicalFallback;
+  }
+
+  CFDataRef layoutData = static_cast<CFDataRef>(
+      TISGetInputSourceProperty(layout, kTISPropertyUnicodeKeyLayoutData));
+  CGKeyCode resolved = physicalFallback;
+  if (layoutData) {
+    const UCKeyboardLayout* keyboardLayout =
+        reinterpret_cast<const UCKeyboardLayout*>(CFDataGetBytePtr(layoutData));
+    for (CGKeyCode code = 0; code < 128; code += 1) {
+      UInt32 deadKeyState = 0;
+      UniChar chars[4] = {0};
+      UniCharCount length = 0;
+      OSStatus status = UCKeyTranslate(keyboardLayout, code, kUCKeyActionDisplay, 0,
+                                       LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit,
+                                       &deadKeyState, 4, &length, chars);
+      if (status == noErr && length == 1 &&
+          (chars[0] == wanted || chars[0] == wanted + ('A' - 'a'))) {
+        resolved = code;
+        break;
+      }
+    }
+  }
+  CFRelease(layout);
+  return resolved;
+}
+
 Napi::Value PostPaste(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (!ArgsMatch(info, {ArgKind::Number})) return Napi::Boolean::New(env, false);
   pid_t expectedPid = static_cast<pid_t>(info[0].As<Napi::Number>().Int32Value());
+  CGKeyCode vKey = KeyCodeForChar('v', kKeyCodeV);
   return Napi::Boolean::New(
-      env, PostKeyToFrontmost(expectedPid, kKeyCodeV, kKeyCodeCommand, kCGEventFlagMaskCommand));
+      env, PostKeyToFrontmost(expectedPid, vKey, kKeyCodeCommand, kCGEventFlagMaskCommand));
 }
 
 /**
