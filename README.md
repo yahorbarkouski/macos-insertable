@@ -7,6 +7,15 @@ success.
 Built for dictation tools, AI assistants, and snippet expanders. Anything that produces text and
 needs it to arrive in the field the user was actually typing in.
 
+![Text being inserted, streamed, and corrected inside a live ChatGPT composer](https://raw.githubusercontent.com/yahorbarkouski/macos-insertable/main/demo.gif)
+
+A sample app driving the library against a ChatGPT composer in another window. The panel reads
+the focused field four times a second: it names what it found, whether writes there can be
+verified, and how many characters the field holds. Insert writes once. Stream types a sentence
+word by word and then corrects `their` to `they're` in place. Scratch empties what it wrote and
+leaves the rest of the field alone. The panel never takes keyboard focus, so the composer stays
+focused throughout.
+
 ```ts
 import { insertText } from 'macos-insertable'
 
